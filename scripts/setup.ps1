@@ -17,6 +17,12 @@ POSTGRES_PASSWORD=$dbPassword
 DATABASE_URL=postgresql+psycopg://clientexplain:${dbPassword}@127.0.0.1:5432/clientexplain
 REDIS_URL=redis://127.0.0.1:6379/0
 CORS_ORIGINS=["http://localhost:3000","http://127.0.0.1:3000"]
+STORAGE_BACKEND=local
+PRIVATE_STORAGE_ROOT=.local/private-storage
+MAX_UPLOAD_BYTES=26214400
+AI_EXTERNAL_PROCESSING_ALLOWED=false
+EMBEDDING_MODEL=text-embedding-3-small
+EMBEDDING_DIMENSIONS=1536
 IMAGE_PROVIDER=disabled
 "@
     [IO.File]::WriteAllText((Join-Path $root '.env'), $content)

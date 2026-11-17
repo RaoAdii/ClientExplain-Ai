@@ -8,6 +8,12 @@ pgvector>=0.3,<1
 redis>=5,<7
 celery>=5.4,<6
 PyJWT[crypto]>=2.10,<3
+# OpenAI 2.x uses httpx, while Starlette's TestClient uses httpx2.
+openai>=2.54,<3
+httpx>=0.28,<1
 httpx2>=2,<3
+PyMuPDF>=1.26,<2
+python-docx>=1.2,<2
+python-multipart>=0.0.29,<1
 pytest>=8,<10
 ruff>=0.9,<1

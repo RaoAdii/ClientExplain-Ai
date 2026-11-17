@@ -8,7 +8,19 @@ env = root / ".env"
 if not env.exists():
     password, token = secrets.token_hex(32), secrets.token_hex(32)
     env.write_text(
-        f"APP_ENV=development\nAUTH_MODE=development\nDEV_AUTH_TOKEN={token}\nPOSTGRES_PASSWORD={password}\nDATABASE_URL=postgresql+psycopg://clientexplain:{password}@127.0.0.1:5432/clientexplain\nREDIS_URL=redis://127.0.0.1:6379/0\nIMAGE_PROVIDER=disabled\n",
+        "APP_ENV=development\n"
+        "AUTH_MODE=development\n"
+        f"DEV_AUTH_TOKEN={token}\n"
+        f"POSTGRES_PASSWORD={password}\n"
+        f"DATABASE_URL=postgresql+psycopg://clientexplain:{password}@127.0.0.1:5432/clientexplain\n"
+        "REDIS_URL=redis://127.0.0.1:6379/0\n"
+        "STORAGE_BACKEND=local\n"
+        "PRIVATE_STORAGE_ROOT=.local/private-storage\n"
+        "MAX_UPLOAD_BYTES=26214400\n"
+        "AI_EXTERNAL_PROCESSING_ALLOWED=false\n"
+        "EMBEDDING_MODEL=text-embedding-3-small\n"
+        "EMBEDDING_DIMENSIONS=1536\n"
+        "IMAGE_PROVIDER=disabled\n",
         encoding="utf-8",
     )
 web_env = root / "apps/web/.env.local"
