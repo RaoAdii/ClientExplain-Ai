@@ -1,0 +1,14 @@
+# ClientExplain AI
+
+> Legal process project workspace. Foundation release.
+
+Available: create, view, edit and delete legal process projects.
+Planned: document processing, source-backed analysis, generated illustrations, editable workflows, lawyer approval, version history, PDF and PNG exports.
+
+All AI-generated legal explanations require professional review and are not verified legal advice. Use non-confidential test information in this evaluation release.
+
+- [Product overview](/)
+- [Draft Privacy Policy](/privacy)
+- [Draft Terms and Conditions](/terms)
+
+Private workspaces and API routes must not be indexed.
