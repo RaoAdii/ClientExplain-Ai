@@ -103,6 +103,13 @@ def test_production_rejects_local_storage(make_settings):
         )
 
 
+@pytest.mark.parametrize("storage_root", ["", " \t"])
+def test_blank_private_storage_root_is_rejected(make_settings, monkeypatch, storage_root):
+    monkeypatch.setenv("PRIVATE_STORAGE_ROOT", storage_root)
+    with pytest.raises(ValidationError, match="PRIVATE_STORAGE_ROOT must contain a path"):
+        make_settings()
+
+
 def test_supabase_storage_requires_server_configuration(make_settings):
     with pytest.raises(ValidationError, match="SUPABASE_STORAGE_BUCKET.*SUPABASE_SERVICE_ROLE_KEY"):
         make_settings(storage_backend="supabase", supabase_url="https://project.example.test")
@@ -115,6 +122,24 @@ def test_supabase_storage_requires_server_configuration(make_settings):
     )
     assert configured.supabase_storage_bucket == "private-documents"
     assert "test-only-service-role-key" not in repr(configured)
+
+
+@pytest.mark.parametrize(
+    "supabase_config",
+    [
+        {"auth_mode": "supabase"},
+        {
+            "storage_backend": "supabase",
+            "supabase_storage_bucket": "private-documents",
+            "supabase_service_role_key": "test-only-service-role-key",
+        },
+    ],
+    ids=["auth", "storage"],
+)
+@pytest.mark.parametrize("url", ["https://", "https:// ", "https:///auth", "https://[broken"])
+def test_supabase_requires_https_url_with_hostname(make_settings, supabase_config, url):
+    with pytest.raises(ValidationError, match="HTTPS SUPABASE_URL"):
+        make_settings(**supabase_config, supabase_url=url)
 
 
 def test_upload_limits_are_bounded(make_settings):

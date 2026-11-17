@@ -1,12 +1,25 @@
 from pathlib import Path
 from typing import Literal, Self
+from urllib.parse import urlsplit
 
-from pydantic import Field, PositiveInt, SecretStr, model_validator
+from pydantic import Field, PositiveInt, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 EMBEDDING_MODEL = "text-embedding-3-small"
 EMBEDDING_DIMENSIONS = 1536
+
+
+def _is_https_url(value: str) -> bool:
+    try:
+        url = urlsplit(value)
+    except ValueError:
+        return False
+    return (
+        url.scheme == "https"
+        and bool(url.hostname)
+        and not any(character.isspace() for character in value)
+    )
 
 
 class Settings(BaseSettings):
@@ -34,6 +47,13 @@ class Settings(BaseSettings):
     analysis_rate_limit: PositiveInt = 5
     rate_limit_window_seconds: PositiveInt = 60
 
+    @field_validator("private_storage_root", mode="before")
+    @classmethod
+    def validate_private_storage_root(cls, value: str | Path) -> str | Path:
+        if isinstance(value, str) and not value.strip():
+            raise ValueError("PRIVATE_STORAGE_ROOT must contain a path")
+        return value
+
     @model_validator(mode="after")
     def validate_auth(self):
         if self.auth_mode == "development":
@@ -41,7 +61,7 @@ class Settings(BaseSettings):
                 raise ValueError("Development authentication is prohibited in production")
             if len(self.dev_auth_token) < 32:
                 raise ValueError("DEV_AUTH_TOKEN must contain at least 32 characters")
-        elif not self.supabase_url.startswith("https://"):
+        elif not _is_https_url(self.supabase_url):
             raise ValueError("Supabase authentication requires an HTTPS SUPABASE_URL")
         if "*" in self.cors_origins:
             raise ValueError("Explicit CORS origins are required")
@@ -52,7 +72,7 @@ class Settings(BaseSettings):
         if self.storage_backend == "local" and self.app_env == "production":
             raise ValueError("Local storage is prohibited in production")
         if self.storage_backend == "supabase" and (
-            not self.supabase_url.startswith("https://")
+            not _is_https_url(self.supabase_url)
             or not self.supabase_storage_bucket.strip()
             or not self.supabase_service_role_key.get_secret_value().strip()
         ):
