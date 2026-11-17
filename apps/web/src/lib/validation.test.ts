@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { projectSchema, authSchema } from "./validation";
+import { projectSchema, loginSchema, registrationSchema } from "./validation";
 
 describe("Project input", () => {
   it("rejects empty, whitespace-only and oversized names", () => {
@@ -21,9 +21,20 @@ describe("Project input", () => {
   });
 });
 describe("Authentication input", () => {
-  it("rejects malformed email and short passwords", () => {
+  it("requires strong registration passwords", () => {
     expect(
-      authSchema.safeParse({ email: "invalid", password: "short" }).success,
+      registrationSchema.safeParse({ email: "invalid", password: "short" })
+        .success,
+    ).toBe(false);
+  });
+  it("allows an existing account to submit a non-empty legacy password", () => {
+    expect(
+      loginSchema.safeParse({ email: "lawyer@example.com", password: "short" })
+        .success,
+    ).toBe(true);
+    expect(
+      loginSchema.safeParse({ email: "lawyer@example.com", password: "" })
+        .success,
     ).toBe(false);
   });
 });

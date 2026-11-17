@@ -19,3 +19,13 @@ Plan: docs/superpowers/plans/2026-11-17-foundation.md
 - Static reviewer confirmed both blocking findings fixed. No remaining blocking review findings; no claim of exhaustive security certification.
 
 Final evidence is recorded in step-1-report.md. Step 2 is not started.
+
+## Completion audit, 18 November 2026
+
+- Revalidated the full frontend, API, migration, PostgreSQL, pgvector, Redis, Celery and Docker foundation.
+- Fixed development/Supabase auth-mode consistency, login versus registration password validation, project-detail retry UX and the BFF request-size boundary.
+- Removed the redundant legacy httpx dependency and retained the Starlette-compatible httpx2 implementation.
+- Added a disposable migration round-trip audit and expanded browser checks to the requested widths, console errors, detail recovery and maximum payload forwarding.
+- Confirmed fresh image builds, all four healthy containers, pgvector 0.8.7, Alembic head `c62fbd003112`, zero invalid indexes/unvalidated constraints, Redis PONG and a completed `worker.health` task.
+- Final local results: 4 Vitest, 12 Pytest and 10 Playwright tests passed; ESLint, TypeScript, Ruff, formatting, production build, pip dependency check and npm production audit passed.
+- Detailed evidence is recorded in `step-1-completion-audit-2026-11-18.md`. Step 2 remains untouched.

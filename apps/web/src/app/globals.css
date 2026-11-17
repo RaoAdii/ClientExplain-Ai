@@ -965,6 +965,9 @@ input[aria-invalid="true"] {
   align-items: center;
   flex-wrap: wrap;
 }
+.error-actions {
+  justify-content: flex-start;
+}
 .project-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

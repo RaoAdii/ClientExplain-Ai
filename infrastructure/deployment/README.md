@@ -2,6 +2,7 @@
 
 This is a verified local foundation, not a production launch authorization.
 Set APP_ENV=production and AUTH_MODE=supabase; development authentication is rejected by FastAPI.
+Set NEXT_PUBLIC_AUTH_MODE=supabase in the web build environment. It must match AUTH_MODE.
 Remove DEV_AUTH_TOKEN and development seed data. Set explicit HTTPS CORS_ORIGINS, Supabase URL/JWKS, and web NEXT_PUBLIC_SUPABASE_URL/NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY.
 Set NEXT_PUBLIC_SITE_URL to the actual custom-domain origin before building. No domain is invented.
 Use a reverse proxy with TLS and rate limits; keep PostgreSQL, Redis and the API off public interfaces.

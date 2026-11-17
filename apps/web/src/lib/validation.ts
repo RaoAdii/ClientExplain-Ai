@@ -10,11 +10,19 @@ export const projectSchema = z.object({
   jurisdiction: z.string().trim().max(120, "Use 120 characters or fewer."),
 });
 export type ProjectInput = z.infer<typeof projectSchema>;
-export const authSchema = z.object({
-  email: z.email("Enter a valid email address."),
+const authEmail = z.email("Enter a valid email address.");
+export const loginSchema = z.object({
+  email: authEmail,
+  password: z
+    .string()
+    .min(1, "Enter your password.")
+    .max(128, "Use 128 characters or fewer."),
+});
+export const registrationSchema = z.object({
+  email: authEmail,
   password: z
     .string()
     .min(8, "Use at least 8 characters.")
     .max(128, "Use 128 characters or fewer."),
 });
-export type AuthInput = z.infer<typeof authSchema>;
+export type AuthInput = z.infer<typeof loginSchema>;

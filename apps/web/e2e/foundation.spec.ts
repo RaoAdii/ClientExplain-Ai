@@ -7,6 +7,9 @@ test("public pages, navigation, metadata and responsive layout", async ({
 }) => {
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
+  page.on("console", (message) => {
+    if (message.type() === "error") errors.push(message.text());
+  });
   for (const path of ["/", "/login", "/register", "/privacy", "/terms"]) {
     await page.goto(path);
     await expect(page.locator("h1")).toHaveCount(1);
@@ -58,12 +61,12 @@ test("public pages, navigation, metadata and responsive layout", async ({
     path: `test-results/landing-${isMobile ? "mobile" : "desktop"}.png`,
     fullPage: true,
   });
+  expect(errors).toEqual([]);
   const missing = await page.goto("/not-a-real-page");
   expect(missing?.status()).toBe(404);
   await expect(page.getByRole("heading", { level: 1 })).toContainText(
     "out of reach",
   );
-  expect(errors).toEqual([]);
 });
 
 test("real project create, persist, edit, delete and sign out", async ({
@@ -72,13 +75,22 @@ test("real project create, persist, edit, delete and sign out", async ({
 }) => {
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
+  page.on("console", (message) => {
+    if (message.type() === "error") errors.push(message.text());
+  });
   await page.goto("/dashboard");
   await expect(page).toHaveURL(/login/);
   await page.getByRole("button", { name: "Open local workspace" }).click();
   await expect(
     page.getByRole("heading", { name: "A clearer starting point." }),
   ).toBeVisible();
-  expect((await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze()).violations).toEqual([]);
+  expect(
+    (
+      await new AxeBuilder({ page })
+        .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
+        .analyze()
+    ).violations,
+  ).toEqual([]);
   await page.getByRole("button", { name: "New project", exact: true }).click();
   await page
     .getByRole("button", { name: "Create project", exact: true })
@@ -157,17 +169,71 @@ test("real project create, persist, edit, delete and sign out", async ({
 
 test("320px layout, keyboard entry and discovery files", async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 740 });
-  for (const path of ["/", "/login", "/register", "/privacy", "/terms", "/missing-page"]) {
+  for (const path of [
+    "/",
+    "/login",
+    "/register",
+    "/privacy",
+    "/terms",
+    "/missing-page",
+  ]) {
     await page.goto(path);
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      ),
+    ).toBe(true);
   }
   await page.goto("/");
   await page.keyboard.press("Tab");
-  await expect(page.getByRole("link", { name: "Skip to content" })).toBeFocused();
+  await expect(
+    page.getByRole("link", { name: "Skip to content" }),
+  ).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL(/#main$/);
-  for (const path of ["/sitemap.xml", "/robots.txt", "/llms.txt", "/icon.svg"]) {
+  for (const path of [
+    "/sitemap.xml",
+    "/robots.txt",
+    "/llms.txt",
+    "/icon.svg",
+  ]) {
     expect((await page.request.get(path)).status()).toBe(200);
+  }
+});
+
+test("requested responsive widths stay within the viewport", async ({
+  page,
+}) => {
+  for (const width of [375, 768, 1024, 1440]) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const path of ["/", "/login", "/privacy", "/terms"]) {
+      await page.goto(path);
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth <= window.innerWidth,
+        ),
+        `${path} overflowed at ${width}px`,
+      ).toBe(true);
+    }
+  }
+  await page.goto("/login");
+  await page.getByRole("button", { name: "Open local workspace" }).click();
+  await expect(page).toHaveURL(/dashboard/);
+  for (const width of [375, 768, 1024, 1440]) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const path of [
+      "/dashboard",
+      "/dashboard/projects",
+      "/dashboard/settings",
+    ]) {
+      await page.goto(path);
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth <= window.innerWidth,
+        ),
+        `${path} overflowed at ${width}px`,
+      ).toBe(true);
+    }
   }
 });
 
@@ -181,6 +247,37 @@ test("service errors are visible and local session rejects cross-origin requests
   await page.goto("/login");
   await page.getByRole("button", { name: "Open local workspace" }).click();
   await expect(page).toHaveURL(/dashboard/);
+  const boundary = await page.evaluate(async () => {
+    const created = await fetch("/api/backend/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "Escaped payload boundary",
+        description: '"'.repeat(10000),
+        jurisdiction: "",
+      }),
+    });
+    const project = await created.json();
+    const removed = await fetch(`/api/backend/projects/${project.id}`, {
+      method: "DELETE",
+    });
+    return { createStatus: created.status, deleteStatus: removed.status };
+  });
+  expect(boundary.createStatus).toBe(201);
+  expect(boundary.deleteStatus).toBe(204);
+  const unavailableId = "00000000-0000-4000-8000-000000000001";
+  await page.route(`**/api/backend/projects/${unavailableId}`, (route) =>
+    route.fulfill({
+      status: 503,
+      json: { error: { message: "Project service temporarily unavailable." } },
+    }),
+  );
+  await page.goto(`/dashboard/projects/${unavailableId}`);
+  await expect(
+    page.getByText("Project service temporarily unavailable."),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "Try again" })).toBeVisible();
+  await page.unroute(`**/api/backend/projects/${unavailableId}`);
   await page.route("**/api/backend/projects?*", (route) =>
     route.fulfill({
       status: 503,

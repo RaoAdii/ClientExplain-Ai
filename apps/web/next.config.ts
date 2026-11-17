@@ -1,5 +1,11 @@
 import type { NextConfig } from "next";
 
+const serverAuthMode = process.env.AUTH_MODE;
+const publicAuthMode = process.env.NEXT_PUBLIC_AUTH_MODE;
+if (serverAuthMode && publicAuthMode && serverAuthMode !== publicAuthMode) {
+  throw new Error("AUTH_MODE and NEXT_PUBLIC_AUTH_MODE must match.");
+}
+
 const nextConfig: NextConfig = {
   poweredByHeader: false,
   async headers() {

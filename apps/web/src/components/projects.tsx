@@ -244,9 +244,14 @@ export function ProjectDetail({ id }: { id: string }) {
         <PageHeader title="Project unavailable">
           {query.error.message}
         </PageHeader>
-        <Button asChild variant="outline">
-          <Link href="/dashboard/projects">Return to projects</Link>
-        </Button>
+        <div className="form-actions error-actions">
+          <Button variant="outline" onClick={() => query.refetch()}>
+            Try again
+          </Button>
+          <Button asChild variant="ghost">
+            <Link href="/dashboard/projects">Return to projects</Link>
+          </Button>
+        </div>
       </>
     );
   const project = query.data;

@@ -54,7 +54,6 @@ shadcn/ui uses source components, not a runtime package. Button follows its Radi
 | PyJWT | 2.15.1 |
 | pytest | 9.2.0 |
 | ruff | 0.17.5 |
-| httpx | 0.28.1 |
 | httpx2 | 2.16.2 |
 
 Full transitive pins: services/api/requirements.lock. AI inference libraries are deferred until model/provider selection; none load into FastAPI.

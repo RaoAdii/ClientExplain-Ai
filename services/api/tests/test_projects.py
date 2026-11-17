@@ -19,6 +19,27 @@ def headers():
 
 def test_health(client):
     assert client.get("/api/v1/health").json()["status"] == "ok"
+    assert client.get("/api/v1/health/ready").json()["status"] == "ready"
+
+
+def test_cors_allows_only_configured_origins(client):
+    allowed = client.options(
+        "/api/v1/projects",
+        headers={
+            "Origin": "http://localhost:3000",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+    assert allowed.status_code == 200
+    assert allowed.headers["access-control-allow-origin"] == "http://localhost:3000"
+    denied = client.options(
+        "/api/v1/projects",
+        headers={
+            "Origin": "https://untrusted.invalid",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+    assert "access-control-allow-origin" not in denied.headers
 
 
 def test_auth_required(client):

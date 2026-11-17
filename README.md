@@ -80,7 +80,7 @@ API tests create and remove their own projects. Database policy tests require th
 Local development does not require cloud keys. To connect a real Supabase project:
 
 1. Set backend `AUTH_MODE=supabase` and `SUPABASE_URL` in `.env`. Configure asymmetric signing keys supported by the JWKS endpoint (ES256/RS256).
-2. Set web `AUTH_MODE=supabase`, `NEXT_PUBLIC_SUPABASE_URL`, and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` in `apps/web/.env.local`. Never put a service-role key in a public variable.
+2. Set web `AUTH_MODE=supabase`, `NEXT_PUBLIC_AUTH_MODE=supabase`, `NEXT_PUBLIC_SUPABASE_URL`, and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` in `apps/web/.env.local`. The public and server auth modes must match. Never put a service-role key in a public variable.
 3. Configure allowed site/redirect URLs and email confirmation in Supabase. Restart API and rebuild/restart web.
 4. Register, confirm email, then sign in. The verified subject gets a personal workspace on its first API request.
 

@@ -1,6 +1,6 @@
 # Step 1 delivery report
 
-Verified locally on 17 November 2026. The locally runnable foundation is complete. This is not a claim that the future AI application is production-ready. Step 2 has not been started.
+Verified again locally on 18 November 2026. The locally runnable foundation is complete. This is not a claim that the future AI application is production-ready. Step 2 has not been started. The detailed completion audit is in `step-1-completion-audit-2026-11-18.md`.
 
 ## Created files and structure
 
@@ -37,11 +37,11 @@ Key implementation files:
 | Next.js production build | Passed |
 | TypeScript | Passed |
 | ESLint | Passed, no remaining lint warnings |
-| Vitest | 3 tests passed |
-| Pytest | 11 tests passed |
+| Vitest | 4 tests passed |
+| Pytest | 12 tests passed |
 | Ruff lint and formatting | Passed |
 | Alembic schema drift | No new upgrade operations detected |
-| Playwright | 8 tests passed, Chromium desktop and iPhone-sized mobile emulation |
+| Playwright | 10 tests passed, Chromium desktop and iPhone-sized mobile emulation |
 | Automated accessibility | No WCAG A/AA violations detected on tested public pages and dashboard |
 | 320px layout and keyboard | Passed; no horizontal overflow on tested public routes, skip link works |
 | Persistence | Browser create, reload, edit, delete and cancellation passed |
@@ -70,7 +70,7 @@ GitHub Actions is configured but has not run remotely. No GitHub repository was 
 
 ## Exact next actions
 
-1. Open http://localhost:3000 and select **Sign in → Open local workspace**.
+1. Open http://localhost:3000 and select **Sign in**, then **Open local workspace**.
 2. Create a project using non-confidential test information and review the interface.
 3. To restart later, run `docker compose --profile app up -d --wait`, then `npm run dev` from the repository root. To stop the background frontend first, run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/stop-web.ps1`.
 4. Supply Step 2 requirements when ready. Real Supabase/OpenAI/provider setup can be completed at that stage without exposing secrets in chat.

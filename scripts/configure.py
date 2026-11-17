@@ -19,7 +19,7 @@ if not web_env.exists():
         if "=" in line and not line.startswith("#")
     )
     web_env.write_text(
-        f"NEXT_PUBLIC_SITE_URL=http://localhost:3000\nAPI_INTERNAL_URL=http://127.0.0.1:8000\nAUTH_MODE=development\nDEV_AUTH_TOKEN={values.get('DEV_AUTH_TOKEN', '')}\n",
+        f"NEXT_PUBLIC_SITE_URL=http://localhost:3000\nNEXT_PUBLIC_AUTH_MODE=development\nAPI_INTERNAL_URL=http://127.0.0.1:8000\nAUTH_MODE=development\nDEV_AUTH_TOKEN={values.get('DEV_AUTH_TOKEN', '')}\n",
         encoding="utf-8",
     )
 print("Local environment is ready. Existing files were preserved; credentials were not printed.")

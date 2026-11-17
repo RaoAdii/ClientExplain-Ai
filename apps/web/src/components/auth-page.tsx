@@ -1,6 +1,7 @@
 import { Navbar, Footer } from "./navigation";
 import { AuthForm } from "./auth-form";
 import { ShieldCheck } from "lucide-react";
+import { authMode } from "@/lib/supabase";
 
 export function AuthPage({ registering = false }: { registering?: boolean }) {
   return (
@@ -32,7 +33,7 @@ export function AuthPage({ registering = false }: { registering?: boolean }) {
           </p>
           <AuthForm
             registering={registering}
-            localEnabled={process.env.AUTH_MODE === "development"}
+            localEnabled={authMode === "development"}
           />
         </section>
       </main>

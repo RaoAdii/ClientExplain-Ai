@@ -1,6 +1,6 @@
 # Global quality checklist
 
-Updated 2026-11-17. This checklist covers implemented Step 1 surfaces and must be repeated after each later stage. Passing the foundation does not certify legal compliance or production readiness of unfinished capabilities.
+Updated and reverified 2026-11-18. This checklist covers implemented Step 1 surfaces and must be repeated after each later stage. Passing the foundation does not certify legal compliance or production readiness of unfinished capabilities. Explicit PASS/BLOCKED evidence from the completion audit is in `step-1-completion-audit-2026-11-18.md`.
 
 | # | Requirement | Step 1 status / evidence |
 |---|---|---|

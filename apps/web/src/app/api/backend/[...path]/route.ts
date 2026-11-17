@@ -39,7 +39,7 @@ async function proxy(
     const body = ["GET", "DELETE"].includes(request.method)
       ? undefined
       : await request.text();
-    if (body && body.length > 20000)
+    if (body && body.length > 80000)
       return NextResponse.json(
         { error: { message: "Request is too large." } },
         { status: 413 },

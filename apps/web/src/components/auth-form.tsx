@@ -6,7 +6,11 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { ArrowRight, ShieldCheck } from "lucide-react";
-import { authSchema, type AuthInput } from "@/lib/validation";
+import {
+  loginSchema,
+  registrationSchema,
+  type AuthInput,
+} from "@/lib/validation";
 import { supabase } from "@/lib/supabase";
 import { useUI } from "@/stores/ui";
 import { Button } from "./ui/button";
@@ -28,7 +32,9 @@ export function AuthForm({
     register,
     handleSubmit,
     formState: { errors, isSubmitting },
-  } = useForm<AuthInput>({ resolver: zodResolver(authSchema) });
+  } = useForm<AuthInput>({
+    resolver: zodResolver(registering ? registrationSchema : loginSchema),
+  });
   async function submit(input: AuthInput) {
     setMessage("");
     if (!supabase) {
