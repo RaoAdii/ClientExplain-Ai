@@ -55,10 +55,10 @@ def test_document_cannot_reference_other_firm_project():
                 ),
                 {"id": project_id, "firm": DEV_FIRM, "user": DEV_USER},
             )
-            with pytest.raises(IntegrityError):
+            with pytest.raises(IntegrityError, match="documents_project_id_firm_id_fkey"):
                 connection.execute(
                     text(
-                        "INSERT INTO documents (id, firm_id, project_id, filename, storage_key, media_type, byte_size, status) VALUES (:id, :firm, :project, 'test.txt', :key, 'text/plain', 10, 'pending')"
+                        "INSERT INTO documents (id, firm_id, project_id, filename, storage_key, media_type, byte_size, status, sha256) VALUES (:id, :firm, :project, 'test.txt', :key, 'text/plain', 10, 'pending', repeat('a', 64))"
                     ),
                     {"id": uuid4(), "firm": firm_id, "project": project_id, "key": str(uuid4())},
                 )

@@ -22,7 +22,7 @@ def ready():
     try:
         with SessionLocal() as db:
             revision = db.scalar(text("SELECT version_num FROM alembic_version"))
-            if revision != "c62fbd003112":
+            if revision != "a27d9c4e8b11":
                 raise RuntimeError("Database migrations are not current")
             db.execute(text("SELECT 1 FROM projects LIMIT 0"))
         redis_client.ping()
