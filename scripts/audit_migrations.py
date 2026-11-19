@@ -3,6 +3,7 @@
 import os
 import subprocess
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 from uuid import uuid4
 
@@ -41,6 +42,15 @@ def migrate(*arguments):
     subprocess.run([*command, *arguments], env=environment, cwd=REPOSITORY_ROOT, check=True)
 
 
+@contextmanager
+def tenant_transaction(ids):
+    with audit.begin() as connection:
+        connection.execute(text("""
+            SELECT set_config('app.firm_id', :firm, true), set_config('app.user_id', :user, true)
+        """), {"firm": str(ids["firm"]), "user": str(ids["user"])})
+        yield connection
+
+
 try:
     migrate("upgrade", step1)
     ids = {
@@ -55,9 +65,17 @@ try:
             "job",
             "queued",
             "running",
+            "new_chunk",
+            "stage",
+            "source",
+            "source_chunk",
+            "citation",
+            "duplicate",
         )
     }
-    with audit.begin() as connection:
+    with tenant_transaction(ids) as connection:
+        assert connection.scalar(text("SELECT current_setting('app.firm_id',true)")) == str(ids["firm"])
+        assert connection.scalar(text("SELECT current_setting('app.user_id',true)")) == str(ids["user"])
         for sql in (
             "INSERT INTO firms (id,name) VALUES (:firm,'Audit')",
             "INSERT INTO profiles (id,display_name) VALUES (:user,'Audit')",
@@ -74,18 +92,18 @@ try:
         ):
             connection.execute(text(sql), ids)
     migrate("upgrade", "head")
-    with audit.connect() as connection:
+    with tenant_transaction(ids) as connection:
         assert connection.scalar(text("SELECT version_num FROM alembic_version")) == expected_head
-        assert connection.scalar(text("SELECT role FROM firm_members")) == "lawyer"
-        assert connection.scalar(text("SELECT owner_id FROM projects")) == ids["user"]
-        assert connection.scalar(text("SELECT processing_status FROM projects")) == "running"
-        assert connection.scalar(text("SELECT sha256 FROM documents")) is None
+        assert connection.scalar(text("SELECT role FROM firm_members WHERE firm_id=:firm AND profile_id=:user"), ids) == "lawyer"
+        assert connection.scalar(text("SELECT owner_id FROM projects WHERE id=:project AND firm_id=:firm"), ids) == ids["user"]
+        assert connection.scalar(text("SELECT processing_status FROM projects WHERE id=:project AND firm_id=:firm"), ids) == "running"
+        assert connection.execute(text("SELECT sha256 FROM documents WHERE id=:document AND firm_id=:firm"), ids).one() == (None,)
         assert connection.execute(
             text(
-                "SELECT source_filename, embedding IS NULL, legacy_embedding::text FROM document_chunks"
-            )
+                "SELECT source_filename, embedding IS NULL, legacy_embedding::text FROM document_chunks WHERE id=:chunk AND firm_id=:firm"
+            ), ids
         ).one() == ("old.txt", True, "[1,2,3]")
-        jobs = dict(connection.execute(text("SELECT id,status FROM generation_jobs")).all())
+        jobs = dict(connection.execute(text("SELECT id,status FROM generation_jobs WHERE firm_id=:firm"), ids).all())
         assert jobs == {
             ids["job"]: "completed",
             ids["running"]: "running",
@@ -96,12 +114,61 @@ try:
             text("SELECT count(*) FROM information_schema.tables WHERE table_schema='public'")
         )
         assert table_count >= 16
+    with tenant_transaction(ids) as connection:
+        connection.execute(text("""
+            UPDATE document_chunks SET embedding=array_fill(1::real,ARRAY[1536])::vector,
+                embedding_model='current', embedding_provider='audit' WHERE id=:chunk AND firm_id=:firm
+        """), ids)
+        connection.execute(text("""
+            INSERT INTO document_chunks (id, firm_id, document_id, position, content, embedding, embedding_model, embedding_provider)
+            VALUES (:new_chunk,:firm,:document,1,'new',array_fill(1::real,ARRAY[1536])::vector,'current','audit')
+        """), ids)
+        for sql in (
+            """INSERT INTO process_stages(id,firm_id,project_id,title,explanation,position)
+               VALUES (:stage,:firm,:project,'Stage','Audit',0)""",
+            """INSERT INTO legal_sources(id,firm_id,project_id,title,url,jurisdiction)
+               VALUES (:source,:firm,:project,'Audit','','')""",
+            """INSERT INTO source_chunks(id,firm_id,source_id,position,content)
+               VALUES (:source_chunk,:firm,:source,0,'Audit')""",
+        ):
+            connection.execute(text(sql), ids)
+    for target in ("document_chunk_id", "source_chunk_id"):
+        with tenant_transaction(ids) as connection:
+            if target == "document_chunk_id":
+                connection.execute(text("""
+                    INSERT INTO stage_citations(id,firm_id,stage_id,document_chunk_id,excerpt)
+                    VALUES (:citation,:firm,:stage,:chunk,'Audit')
+                """), ids)
+                expected_count = 1
+            else:
+                connection.execute(text("""
+                    INSERT INTO stage_citations(id,firm_id,stage_id,source_chunk_id,excerpt) VALUES
+                    (:citation,:firm,:stage,:source_chunk,'Audit'),
+                    (:duplicate,:firm,:stage,:source_chunk,'Audit')
+                """), ids)
+                expected_count = 2
+        attempt = subprocess.run([*command, "downgrade", step1], env=environment, cwd=REPOSITORY_ROOT,
+                                 capture_output=True, text=True)
+        assert attempt.returncode != 0 and "Step 1 cannot represent" in attempt.stderr, (
+            f"Expected a safe downgrade refusal for {target}"
+        )
+        with tenant_transaction(ids) as connection:
+            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == expected_head
+            assert connection.scalar(text("""
+                SELECT count(*) FROM stage_citations WHERE firm_id=:firm AND stage_id=:stage
+            """), ids) == expected_count
+            connection.execute(text("""
+                DELETE FROM stage_citations WHERE firm_id=:firm AND stage_id=:stage
+            """), ids)
     migrate("downgrade", step1)
-    with audit.connect() as connection:
-        assert connection.scalar(text("SELECT role FROM firm_members")) == "member"
+    with tenant_transaction(ids) as connection:
+        assert connection.scalar(text("SELECT role FROM firm_members WHERE firm_id=:firm AND profile_id=:user"), ids) == "member"
         assert connection.execute(
-            text("SELECT embedding::text, embedding_model FROM document_chunks")
+            text("SELECT embedding::text, embedding_model FROM document_chunks WHERE id=:chunk"), ids
         ).one() == ("[1,2,3]", "legacy-model")
+        assert connection.execute(text("""
+            SELECT vector_dims(embedding), embedding_model FROM document_chunks WHERE id=:new_chunk
+        """), ids).one() == (1536, "current")
         assert (
             connection.scalar(text("SELECT status FROM generation_jobs WHERE id=:job"), ids)
             == "succeeded"

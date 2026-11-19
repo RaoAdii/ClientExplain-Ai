@@ -16,6 +16,8 @@ BACKFILLED = (
     "generation_jobs",
     "stage_citations",
     "source_chunks",
+    "legal_sources",
+    "process_stages",
 )
 
 
@@ -24,6 +26,63 @@ def set_force_rls(enabled):
     # ALTER holds ACCESS EXCLUSIVE until this migration transaction commits.
     for table in BACKFILLED:
         op.execute(f"ALTER TABLE {table} {'FORCE' if enabled else 'NO FORCE'} ROW LEVEL SECURITY")
+
+
+def install_citation_provenance():
+    # Step 1 stored no project or verification state on a legal source.
+    # Recover the narrowest scope supported by its existing references.
+    op.execute("""DO $$ BEGIN
+        IF EXISTS (
+            SELECT 1 FROM stage_citations c
+            JOIN source_chunks ch ON (ch.id,ch.firm_id)=(c.source_chunk_id,c.firm_id)
+            JOIN legal_sources s ON (s.id,s.firm_id)=(ch.source_id,ch.firm_id)
+            JOIN process_stages st ON (st.id,st.firm_id)=(c.stage_id,c.firm_id)
+            WHERE s.project_id IS NULL AND s.verification_status='unverified'
+            GROUP BY s.id HAVING count(DISTINCT st.project_id)>1
+        ) THEN
+            RAISE EXCEPTION 'Legacy unverified sources have citations in multiple projects. Resolve source ownership before upgrading.';
+        END IF;
+    END $$""")
+    op.execute("""
+        UPDATE legal_sources s SET project_id=st.project_id FROM stage_citations c
+        JOIN source_chunks ch ON (ch.id,ch.firm_id)=(c.source_chunk_id,c.firm_id)
+        JOIN process_stages st ON (st.id,st.firm_id)=(c.stage_id,c.firm_id)
+        WHERE (s.id,s.firm_id)=(ch.source_id,ch.firm_id)
+          AND s.project_id IS NULL AND s.verification_status='unverified'
+    """)
+    op.execute("""ALTER TABLE legal_sources ADD citation_scope text GENERATED ALWAYS AS
+                  (coalesce(project_id::text,verification_status)) STORED NOT NULL,
+                  ADD CONSTRAINT uq_legal_sources_citation_scope UNIQUE (id,citation_scope,firm_id)""")
+    op.execute("ALTER TABLE document_chunks ADD CONSTRAINT uq_document_chunks_parent UNIQUE (id,document_id,firm_id)")
+    op.execute("ALTER TABLE source_chunks ADD CONSTRAINT uq_source_chunks_parent UNIQUE (id,source_id,firm_id)")
+    op.execute("ALTER TABLE process_stages ADD CONSTRAINT uq_process_stages_project UNIQUE (id,project_id,firm_id)")
+    op.execute("""
+        ALTER TABLE stage_citations ADD project_id uuid, ADD document_id uuid, ADD legal_source_id uuid, ADD source_scope text,
+        ADD FOREIGN KEY (stage_id,project_id,firm_id) REFERENCES process_stages (id,project_id,firm_id) ON DELETE CASCADE,
+        ADD FOREIGN KEY (document_chunk_id,document_id,firm_id) REFERENCES document_chunks (id,document_id,firm_id) ON DELETE CASCADE,
+        ADD FOREIGN KEY (document_id,project_id,firm_id) REFERENCES documents (id,project_id,firm_id) ON DELETE CASCADE,
+        ADD FOREIGN KEY (source_chunk_id,legal_source_id,firm_id) REFERENCES source_chunks (id,source_id,firm_id) ON DELETE CASCADE,
+        ADD FOREIGN KEY (legal_source_id,source_scope,firm_id) REFERENCES legal_sources (id,citation_scope,firm_id) ON DELETE CASCADE
+    """)
+    op.execute("""CREATE FUNCTION derive_citation_ancestry() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+            SELECT project_id INTO NEW.project_id FROM process_stages
+             WHERE (id,firm_id)=(NEW.stage_id,NEW.firm_id);
+            SELECT document_id INTO NEW.document_id FROM document_chunks
+             WHERE (id,firm_id)=(NEW.document_chunk_id,NEW.firm_id);
+            SELECT s.id,s.citation_scope INTO NEW.legal_source_id,NEW.source_scope
+             FROM source_chunks ch JOIN legal_sources s ON (s.id,s.firm_id)=(ch.source_id,ch.firm_id)
+             WHERE (ch.id,ch.firm_id)=(NEW.source_chunk_id,NEW.firm_id);
+            RETURN NEW;
+        END; $$""")
+    op.execute("""CREATE TRIGGER derive_ancestry BEFORE INSERT OR UPDATE ON stage_citations
+                  FOR EACH ROW EXECUTE FUNCTION derive_citation_ancestry()""")
+    op.execute("UPDATE stage_citations SET project_id=NULL")
+    op.execute("""ALTER TABLE stage_citations ALTER project_id SET NOT NULL,
+        ADD CONSTRAINT ck_stage_citations_document_parent CHECK (document_chunk_id IS NULL OR document_id IS NOT NULL),
+        ADD CONSTRAINT ck_stage_citations_source_scope CHECK (source_chunk_id IS NULL OR
+            (legal_source_id IS NOT NULL AND source_scope IS NOT NULL AND source_scope IN ('verified', project_id::text)))
+    """)
 
 
 def upgrade():
@@ -145,6 +204,7 @@ def upgrade():
     op.execute(
         "CREATE INDEX ix_stage_citations_document_chunk_id ON stage_citations (document_chunk_id)"
     )
+    install_citation_provenance()
 
     op.execute("""
         ALTER TABLE generation_jobs DROP CONSTRAINT generation_jobs_status_check,
@@ -199,7 +259,23 @@ def upgrade():
 
 
 def downgrade():
+    # Native constraint validation sees all rows under FORCE RLS. DDL locks
+    # also exclude concurrent citation writes until the downgrade commits.
+    op.execute("""DO $$ BEGIN
+        ALTER TABLE stage_citations ALTER source_chunk_id SET NOT NULL,
+            ADD UNIQUE (stage_id,source_chunk_id),
+            ADD CHECK (claim_text='' AND validation_status='unverified');
+    EXCEPTION WHEN not_null_violation OR unique_violation OR check_violation THEN
+        RAISE EXCEPTION 'Step 1 cannot represent existing citation data. Archive and explicitly resolve these citations before downgrading.';
+    END $$""")
     set_force_rls(False)
+    op.execute("DROP TRIGGER derive_ancestry ON stage_citations")
+    op.execute("DROP FUNCTION derive_citation_ancestry()")
+    op.execute("ALTER TABLE stage_citations DROP project_id, DROP document_id, DROP legal_source_id, DROP source_scope")
+    op.execute("ALTER TABLE legal_sources DROP citation_scope")
+    op.execute("ALTER TABLE process_stages DROP CONSTRAINT uq_process_stages_project")
+    op.execute("ALTER TABLE document_chunks DROP CONSTRAINT uq_document_chunks_parent")
+    op.execute("ALTER TABLE source_chunks DROP CONSTRAINT uq_source_chunks_parent")
     op.execute("DROP TRIGGER immutable_version ON project_versions")
     op.execute("DROP FUNCTION reject_version_update()")
     op.execute("ALTER TABLE project_versions DROP generation_job_id")
@@ -216,19 +292,10 @@ def downgrade():
     op.execute("""ALTER TABLE generation_jobs ADD CONSTRAINT generation_jobs_status_check
                   CHECK (status IN ('pending','running','succeeded','failed','cancelled'))""")
 
-    # Step 1 can express only one citation per (stage, legal-source chunk).
-    op.execute("DELETE FROM stage_citations WHERE source_chunk_id IS NULL")
-    op.execute("""
-        DELETE FROM stage_citations c USING stage_citations earlier
-        WHERE (c.stage_id, c.source_chunk_id) = (earlier.stage_id, earlier.source_chunk_id)
-          AND (c.created_at, c.id) > (earlier.created_at, earlier.id)
-    """)
     op.execute("""
         ALTER TABLE stage_citations DROP CONSTRAINT stage_citations_source_chunk_id_firm_id_fkey,
         DROP document_chunk_id, DROP claim_text, DROP validation_status,
-        ALTER source_chunk_id SET NOT NULL,
-        ADD FOREIGN KEY (source_chunk_id, firm_id) REFERENCES source_chunks (id, firm_id),
-        ADD UNIQUE (stage_id, source_chunk_id)
+        ADD FOREIGN KEY (source_chunk_id, firm_id) REFERENCES source_chunks (id, firm_id)
     """)
     op.execute("""
         ALTER TABLE process_stages DROP responsible_party, DROP required_documents, DROP estimated_duration,
@@ -242,7 +309,8 @@ def downgrade():
                   DROP token_start, DROP token_end, DROP CONSTRAINT uq_document_chunks_identity""")
     for table in CHUNKS:
         op.execute(f"""UPDATE {table} SET legacy_embedding=embedding, legacy_embedding_model=embedding_model
-                      WHERE embedding IS NOT NULL""")
+                      WHERE legacy_embedding IS NULL AND legacy_embedding_model IS NULL
+                        AND embedding IS NOT NULL""")
         op.execute(f"""ALTER TABLE {table} DROP embedding, DROP embedding_model, DROP embedding_provider,
                       DROP heading, DROP page_number, DROP metadata""")
         op.execute(f"ALTER TABLE {table} RENAME legacy_embedding TO embedding")

@@ -7,6 +7,7 @@ from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     JSON,
     CheckConstraint,
+    Computed,
     DateTime,
     FetchedValue,
     ForeignKey,
@@ -185,6 +186,7 @@ class DocumentChunk(ChunkEvidence, Record, Tenant, Base):
         UniqueConstraint("document_id", "position"),
         CheckConstraint("position >= 0"),
         UniqueConstraint("id", "firm_id", name="uq_document_chunks_identity"),
+        UniqueConstraint("id", "document_id", "firm_id", name="uq_document_chunks_parent"),
         CheckConstraint(
             "char_start >= 0 AND char_end >= char_start", name="ck_document_chunks_char_offsets"
         ),
@@ -212,8 +214,12 @@ class LegalSource(Record, Tenant, Base):
     source_metadata: Mapped[dict] = mapped_column("metadata", JSON, server_default="{}")
     project_id: Mapped[uuid.UUID | None]
     document_id: Mapped[uuid.UUID | None]
+    citation_scope: Mapped[str] = mapped_column(
+        Text, Computed("coalesce(project_id::text, verification_status)", persisted=True)
+    )
     __table_args__ = (
         UniqueConstraint("id", "firm_id"),
+        UniqueConstraint("id", "citation_scope", "firm_id", name="uq_legal_sources_citation_scope"),
         ForeignKeyConstraint(
             ["project_id", "firm_id"], ["projects.id", "projects.firm_id"], ondelete="CASCADE"
         ),
@@ -247,6 +253,7 @@ class SourceChunk(ChunkEvidence, Record, Tenant, Base):
     content: Mapped[str] = mapped_column(Text)
     __table_args__ = (
         UniqueConstraint("id", "firm_id"),
+        UniqueConstraint("id", "source_id", "firm_id", name="uq_source_chunks_parent"),
         UniqueConstraint("source_id", "position"),
         ForeignKeyConstraint(
             ["source_id", "firm_id"],
@@ -272,6 +279,7 @@ class ProcessStage(ProjectChild, Base):
     visual_prompt: Mapped[str | None] = mapped_column(Text)
     position: Mapped[int] = mapped_column(Integer)
     __table_args__ = project_constraints(
+        UniqueConstraint("id", "project_id", "firm_id", name="uq_process_stages_project"),
         UniqueConstraint("project_id", "position"),
         CheckConstraint("position >= 0"),
         CheckConstraint(
@@ -287,9 +295,26 @@ class StageCitation(Record, Tenant, Base):
     source_chunk_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, index=True)
     document_chunk_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, index=True)
     excerpt: Mapped[str] = mapped_column(Text)
+    # PostgreSQL derives this ancestry from the stage and chunk on each write.
+    project_id: Mapped[uuid.UUID] = mapped_column(server_default=FetchedValue())
+    document_id: Mapped[uuid.UUID | None] = mapped_column(server_default=FetchedValue())
+    legal_source_id: Mapped[uuid.UUID | None] = mapped_column(server_default=FetchedValue())
+    source_scope: Mapped[str | None] = mapped_column(Text, server_default=FetchedValue())
     claim_text: Mapped[str] = mapped_column(Text, server_default="")
     validation_status: Mapped[str] = mapped_column(String(30), server_default="unverified")
     __table_args__ = (
+        ForeignKeyConstraint(["stage_id", "project_id", "firm_id"],
+                             ["process_stages.id", "process_stages.project_id", "process_stages.firm_id"], ondelete="CASCADE"),
+        ForeignKeyConstraint(["document_chunk_id", "document_id", "firm_id"],
+                             ["document_chunks.id", "document_chunks.document_id", "document_chunks.firm_id"], ondelete="CASCADE"),
+        ForeignKeyConstraint(["document_id", "project_id", "firm_id"],
+                             ["documents.id", "documents.project_id", "documents.firm_id"], ondelete="CASCADE"),
+        ForeignKeyConstraint(["source_chunk_id", "legal_source_id", "firm_id"],
+                             ["source_chunks.id", "source_chunks.source_id", "source_chunks.firm_id"], ondelete="CASCADE"),
+        ForeignKeyConstraint(["legal_source_id", "source_scope", "firm_id"],
+                             ["legal_sources.id", "legal_sources.citation_scope", "legal_sources.firm_id"], ondelete="CASCADE"),
+        CheckConstraint("document_chunk_id IS NULL OR document_id IS NOT NULL", name="ck_stage_citations_document_parent"),
+        CheckConstraint("source_chunk_id IS NULL OR (legal_source_id IS NOT NULL AND source_scope IS NOT NULL AND source_scope IN ('verified', project_id::text))", name="ck_stage_citations_source_scope"),
         ForeignKeyConstraint(
             ["stage_id", "firm_id"],
             ["process_stages.id", "process_stages.firm_id"],
