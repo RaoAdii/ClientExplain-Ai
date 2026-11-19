@@ -53,9 +53,15 @@ def install_citation_provenance():
     op.execute("""ALTER TABLE legal_sources ADD citation_scope text GENERATED ALWAYS AS
                   (coalesce(project_id::text,verification_status)) STORED NOT NULL,
                   ADD CONSTRAINT uq_legal_sources_citation_scope UNIQUE (id,citation_scope,firm_id)""")
-    op.execute("ALTER TABLE document_chunks ADD CONSTRAINT uq_document_chunks_parent UNIQUE (id,document_id,firm_id)")
-    op.execute("ALTER TABLE source_chunks ADD CONSTRAINT uq_source_chunks_parent UNIQUE (id,source_id,firm_id)")
-    op.execute("ALTER TABLE process_stages ADD CONSTRAINT uq_process_stages_project UNIQUE (id,project_id,firm_id)")
+    op.execute(
+        "ALTER TABLE document_chunks ADD CONSTRAINT uq_document_chunks_parent UNIQUE (id,document_id,firm_id)"
+    )
+    op.execute(
+        "ALTER TABLE source_chunks ADD CONSTRAINT uq_source_chunks_parent UNIQUE (id,source_id,firm_id)"
+    )
+    op.execute(
+        "ALTER TABLE process_stages ADD CONSTRAINT uq_process_stages_project UNIQUE (id,project_id,firm_id)"
+    )
     op.execute("""
         ALTER TABLE stage_citations ADD project_id uuid, ADD document_id uuid, ADD legal_source_id uuid, ADD source_scope text,
         ADD FOREIGN KEY (stage_id,project_id,firm_id) REFERENCES process_stages (id,project_id,firm_id) ON DELETE CASCADE,
@@ -271,7 +277,9 @@ def downgrade():
     set_force_rls(False)
     op.execute("DROP TRIGGER derive_ancestry ON stage_citations")
     op.execute("DROP FUNCTION derive_citation_ancestry()")
-    op.execute("ALTER TABLE stage_citations DROP project_id, DROP document_id, DROP legal_source_id, DROP source_scope")
+    op.execute(
+        "ALTER TABLE stage_citations DROP project_id, DROP document_id, DROP legal_source_id, DROP source_scope"
+    )
     op.execute("ALTER TABLE legal_sources DROP citation_scope")
     op.execute("ALTER TABLE process_stages DROP CONSTRAINT uq_process_stages_project")
     op.execute("ALTER TABLE document_chunks DROP CONSTRAINT uq_document_chunks_parent")

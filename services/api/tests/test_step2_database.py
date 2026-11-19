@@ -179,7 +179,15 @@ def test_citation_requires_one_real_tenant_scoped_chunk(db):
         position=0,
         content="Evidence",
     )
-    source = insert(db, "legal_sources", firm_id=DEV_FIRM, title="Source", url="", jurisdiction="", project_id=pid)
+    source = insert(
+        db,
+        "legal_sources",
+        firm_id=DEV_FIRM,
+        title="Source",
+        url="",
+        jurisdiction="",
+        project_id=pid,
+    )
     other = insert(
         db,
         "source_chunks",
@@ -214,34 +222,65 @@ def test_citation_requires_one_real_tenant_scoped_chunk(db):
     )
 
 
-@pytest.mark.parametrize(("kind", "scope", "valid"), [
-    ("document", "other", False),
-    ("source", "other", False),
-    ("source", "firm-unverified", False),
-    ("source", "firm-verified", True),
-])
+@pytest.mark.parametrize(
+    ("kind", "scope", "valid"),
+    [
+        ("document", "other", False),
+        ("source", "other", False),
+        ("source", "firm-unverified", False),
+        ("source", "firm-verified", True),
+    ],
+)
 def test_citations_enforce_project_provenance(db, kind, scope, valid):
     first, second = project(db)["id"], project(db)["id"]
-    stage = insert(db, "process_stages", firm_id=DEV_FIRM, project_id=first,
-                   position=0, title="Review", explanation="Review")
+    stage = insert(
+        db,
+        "process_stages",
+        firm_id=DEV_FIRM,
+        project_id=first,
+        position=0,
+        title="Review",
+        explanation="Review",
+    )
     if kind == "document":
         doc = document(db, second)
-        chunk = insert(db, "document_chunks", firm_id=DEV_FIRM, document_id=doc["id"],
-                       position=0, content="Evidence")
+        chunk = insert(
+            db,
+            "document_chunks",
+            firm_id=DEV_FIRM,
+            document_id=doc["id"],
+            position=0,
+            content="Evidence",
+        )
         target = {"document_chunk_id": chunk["id"]}
     else:
-        source = insert(db, "legal_sources", firm_id=DEV_FIRM, title="Reference", url="",
-                        jurisdiction="", project_id=second if scope == "other" else None,
-                        verification_status="unverified" if scope == "firm-unverified" else "verified")
-        chunk = insert(db, "source_chunks", firm_id=DEV_FIRM, source_id=source["id"],
-                       position=0, content="Evidence")
+        source = insert(
+            db,
+            "legal_sources",
+            firm_id=DEV_FIRM,
+            title="Reference",
+            url="",
+            jurisdiction="",
+            project_id=second if scope == "other" else None,
+            verification_status="unverified" if scope == "firm-unverified" else "verified",
+        )
+        chunk = insert(
+            db,
+            "source_chunks",
+            firm_id=DEV_FIRM,
+            source_id=source["id"],
+            position=0,
+            content="Evidence",
+        )
         target = {"source_chunk_id": chunk["id"]}
     fields = dict(firm_id=DEV_FIRM, stage_id=stage["id"], excerpt="Evidence", **target)
     if valid:
         insert(db, "stage_citations", **fields)
         with pytest.raises(IntegrityError), db.begin_nested():
-            db.execute(text("UPDATE legal_sources SET verification_status='unverified' WHERE id=:id"),
-                       {"id": source["id"]})
+            db.execute(
+                text("UPDATE legal_sources SET verification_status='unverified' WHERE id=:id"),
+                {"id": source["id"]},
+            )
     else:
         with pytest.raises(IntegrityError), db.begin_nested():
             insert(db, "stage_citations", **fields)
