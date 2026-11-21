@@ -265,16 +265,22 @@ def upgrade():
 
 
 def downgrade():
-    # Native constraint validation sees all rows under FORCE RLS. DDL locks
-    # also exclude concurrent citation writes until the downgrade commits.
+    # Lock the backfilled tables and let the owner inspect every firm before
+    # changing the schema. A refusal rolls back the temporary FORCE settings.
+    set_force_rls(False)
     op.execute("""DO $$ BEGIN
+        IF EXISTS (
+            SELECT 1 FROM stage_citations WHERE source_scope='verified'
+            GROUP BY firm_id,legal_source_id HAVING count(DISTINCT project_id)>1
+        ) THEN
+            RAISE EXCEPTION 'Step 1 cannot represent verified firm-wide sources cited by multiple projects. Archive or explicitly resolve these cross-project citation associations before downgrading.';
+        END IF;
         ALTER TABLE stage_citations ALTER source_chunk_id SET NOT NULL,
             ADD UNIQUE (stage_id,source_chunk_id),
             ADD CHECK (claim_text='' AND validation_status='unverified');
     EXCEPTION WHEN not_null_violation OR unique_violation OR check_violation THEN
         RAISE EXCEPTION 'Step 1 cannot represent existing citation data. Archive and explicitly resolve these citations before downgrading.';
     END $$""")
-    set_force_rls(False)
     op.execute("DROP TRIGGER derive_ancestry ON stage_citations")
     op.execute("DROP FUNCTION derive_citation_ancestry()")
     op.execute(
@@ -317,8 +323,7 @@ def downgrade():
                   DROP token_start, DROP token_end, DROP CONSTRAINT uq_document_chunks_identity""")
     for table in CHUNKS:
         op.execute(f"""UPDATE {table} SET legacy_embedding=embedding, legacy_embedding_model=embedding_model
-                      WHERE legacy_embedding IS NULL AND legacy_embedding_model IS NULL
-                        AND embedding IS NOT NULL""")
+                      WHERE legacy_embedding IS NULL AND embedding IS NOT NULL""")
         op.execute(f"""ALTER TABLE {table} DROP embedding, DROP embedding_model, DROP embedding_provider,
                       DROP heading, DROP page_number, DROP metadata""")
         op.execute(f"ALTER TABLE {table} RENAME legacy_embedding TO embedding")

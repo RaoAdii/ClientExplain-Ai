@@ -42,6 +42,19 @@ def migrate(*arguments):
     subprocess.run([*command, *arguments], env=environment, cwd=REPOSITORY_ROOT, check=True)
 
 
+def expect_downgrade_refusal(reason):
+    attempt = subprocess.run(
+        [*command, "downgrade", step1],
+        env=environment,
+        cwd=REPOSITORY_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    assert attempt.returncode != 0 and reason in attempt.stderr, (
+        f"Expected rollback refusal: {reason}"
+    )
+
+
 @contextmanager
 def tenant_transaction(ids):
     with audit.begin() as connection:
@@ -77,7 +90,9 @@ try:
                     generation_jobs,process_stages,legal_sources,source_chunks,stage_citations TO pg_database_owner
             """)
             )
-            connection.execute(text("GRANT UPDATE ON document_chunks TO pg_database_owner"))
+            connection.execute(
+                text("GRANT UPDATE ON document_chunks,source_chunks TO pg_database_owner")
+            )
             connection.execute(text("GRANT DELETE ON stage_citations TO pg_database_owner"))
     ids = {
         name: uuid4()
@@ -97,6 +112,13 @@ try:
             "source_chunk",
             "citation",
             "legacy_citation",
+            "second_project",
+            "second_stage",
+            "firm_source",
+            "first_firm_chunk",
+            "second_firm_chunk",
+            "first_firm_citation",
+            "second_firm_citation",
         )
     }
     with tenant_transaction(ids) as connection:
@@ -123,8 +145,8 @@ try:
                VALUES (:stage,:firm,:project,'Stage','Audit',0)""",
             """INSERT INTO legal_sources(id,firm_id,title,url,jurisdiction)
                VALUES (:source,:firm,'Audit','','')""",
-            """INSERT INTO source_chunks(id,firm_id,source_id,position,content)
-               VALUES (:source_chunk,:firm,:source,0,'Audit')""",
+            """INSERT INTO source_chunks(id,firm_id,source_id,position,content,embedding_model)
+               VALUES (:source_chunk,:firm,:source,0,'Audit','legacy-model-without-vector')""",
             """INSERT INTO stage_citations(id,firm_id,stage_id,source_chunk_id,excerpt)
                VALUES (:legacy_citation,:firm,:stage,:source_chunk,'Original')""",
         ):
@@ -188,6 +210,14 @@ try:
     with tenant_transaction(ids) as connection:
         connection.execute(
             text("""
+            UPDATE source_chunks SET embedding=array_fill(2::real,ARRAY[1536])::vector,
+                embedding_model='new-source-model', embedding_provider='audit'
+            WHERE id=:source_chunk AND firm_id=:firm
+        """),
+            ids,
+        )
+        connection.execute(
+            text("""
             UPDATE document_chunks SET embedding=array_fill(1::real,ARRAY[1536])::vector,
                 embedding_model='current', embedding_provider='audit' WHERE id=:chunk AND firm_id=:firm
         """),
@@ -209,16 +239,7 @@ try:
             """),
                 ids,
             )
-        attempt = subprocess.run(
-            [*command, "downgrade", step1],
-            env=environment,
-            cwd=REPOSITORY_ROOT,
-            capture_output=True,
-            text=True,
-        )
-        assert attempt.returncode != 0 and "Step 1 cannot represent" in attempt.stderr, (
-            f"Expected a safe downgrade refusal for {target}"
-        )
+        expect_downgrade_refusal("Step 1 cannot represent existing citation data")
         with tenant_transaction(ids) as connection:
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version")) == expected_head
@@ -238,8 +259,55 @@ try:
             """),
                 ids,
             )
+    with tenant_transaction(ids) as connection:
+        for sql in (
+            """INSERT INTO projects(id,firm_id,created_by,name,description,jurisdiction,review_status)
+               VALUES (:second_project,:firm,:user,'Second','','','requires_review')""",
+            """INSERT INTO process_stages(id,firm_id,project_id,title,explanation,position)
+               VALUES (:second_stage,:firm,:second_project,'Second stage','Audit',0)""",
+            """INSERT INTO legal_sources(id,firm_id,title,url,jurisdiction,verification_status)
+               VALUES (:firm_source,:firm,'Shared','','','verified')""",
+            """INSERT INTO source_chunks(id,firm_id,source_id,position,content) VALUES
+               (:first_firm_chunk,:firm,:firm_source,0,'First'),
+               (:second_firm_chunk,:firm,:firm_source,1,'Second')""",
+            """INSERT INTO stage_citations(id,firm_id,stage_id,source_chunk_id,excerpt) VALUES
+               (:first_firm_citation,:firm,:stage,:first_firm_chunk,'First'),
+               (:second_firm_citation,:firm,:second_stage,:second_firm_chunk,'Second')""",
+        ):
+            connection.execute(text(sql), ids)
+    expect_downgrade_refusal("verified firm-wide sources cited by multiple projects")
+    with tenant_transaction(ids) as connection:
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == expected_head
+        assert connection.execute(
+            text("""
+            SELECT project_id,verification_status FROM legal_sources WHERE firm_id=:firm AND id=:firm_source
+        """),
+            ids,
+        ).one() == (None, "verified")
+        assert set(
+            connection.execute(
+                text("""
+            SELECT id,project_id FROM stage_citations WHERE firm_id=:firm AND legal_source_id=:firm_source
+        """),
+                ids,
+            )
+        ) == {
+            (ids["first_firm_citation"], ids["project"]),
+            (ids["second_firm_citation"], ids["second_project"]),
+        }
+        connection.execute(
+            text("DELETE FROM stage_citations WHERE firm_id=:firm AND id=:second_firm_citation"),
+            ids,
+        )
     migrate("downgrade", step1)
     with tenant_transaction(ids) as connection:
+        assert connection.execute(
+            text("""
+            SELECT embedding=array_fill(2::real,ARRAY[1536])::vector, embedding_model
+            FROM source_chunks WHERE id=:source_chunk AND firm_id=:firm
+        """),
+            ids,
+        ).one() == (True, "new-source-model"), "model-only legacy row lost its active embedding"
         assert connection.execute(
             text("""
             SELECT source_chunk_id, excerpt FROM stage_citations WHERE id=:legacy_citation AND firm_id=:firm
@@ -270,6 +338,15 @@ try:
             )
             == "succeeded"
         )
+    migrate("upgrade", "head")
+    with tenant_transaction(ids) as connection:
+        assert connection.execute(
+            text("""
+            SELECT project_id,source_chunk_id,excerpt FROM stage_citations
+            WHERE firm_id=:firm AND id=:first_firm_citation
+        """),
+            ids,
+        ).one() == (ids["project"], ids["first_firm_chunk"], "First")
     migrate("downgrade", "base")
     migrate("upgrade", "head")
     migrate("check")
