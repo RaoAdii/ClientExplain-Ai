@@ -45,14 +45,40 @@ def migrate(*arguments):
 @contextmanager
 def tenant_transaction(ids):
     with audit.begin() as connection:
-        connection.execute(text("""
+        if use_owner_role:
+            connection.execute(text("SET LOCAL ROLE pg_database_owner"))
+        assert connection.scalar(text("SELECT row_security_active('firms')"))
+        connection.execute(
+            text("""
             SELECT set_config('app.firm_id', :firm, true), set_config('app.user_id', :user, true)
-        """), {"firm": str(ids["firm"]), "user": str(ids["user"])})
+        """),
+            {"firm": str(ids["firm"]), "user": str(ids["user"])},
+        )
         yield connection
 
 
 try:
     migrate("upgrade", step1)
+    with audit.begin() as connection:
+        use_owner_role = connection.scalar(
+            text("""
+            SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname=current_user
+        """)
+        )
+        if use_owner_role:
+            # Exercise the policies even when the local migration login is a superuser.
+            # This built-in role and these grants are scoped to the disposable database.
+            connection.execute(
+                text("GRANT SELECT ON ALL TABLES IN SCHEMA public TO pg_database_owner")
+            )
+            connection.execute(
+                text("""
+                GRANT INSERT ON firms,profiles,firm_members,projects,documents,document_chunks,
+                    generation_jobs,process_stages,legal_sources,source_chunks,stage_citations TO pg_database_owner
+            """)
+            )
+            connection.execute(text("GRANT UPDATE ON document_chunks TO pg_database_owner"))
+            connection.execute(text("GRANT DELETE ON stage_citations TO pg_database_owner"))
     ids = {
         name: uuid4()
         for name in (
@@ -70,12 +96,16 @@ try:
             "source",
             "source_chunk",
             "citation",
-            "duplicate",
+            "legacy_citation",
         )
     }
     with tenant_transaction(ids) as connection:
-        assert connection.scalar(text("SELECT current_setting('app.firm_id',true)")) == str(ids["firm"])
-        assert connection.scalar(text("SELECT current_setting('app.user_id',true)")) == str(ids["user"])
+        assert connection.scalar(text("SELECT current_setting('app.firm_id',true)")) == str(
+            ids["firm"]
+        )
+        assert connection.scalar(text("SELECT current_setting('app.user_id',true)")) == str(
+            ids["user"]
+        )
         for sql in (
             "INSERT INTO firms (id,name) VALUES (:firm,'Audit')",
             "INSERT INTO profiles (id,display_name) VALUES (:user,'Audit')",
@@ -89,21 +119,62 @@ try:
             """INSERT INTO generation_jobs (id,firm_id,project_id,status,kind) VALUES
                (:job,:firm,:project,'succeeded','analysis'), (:queued,:firm,:project,'pending','analysis'),
                (:running,:firm,:project,'running','analysis')""",
+            """INSERT INTO process_stages(id,firm_id,project_id,title,explanation,position)
+               VALUES (:stage,:firm,:project,'Stage','Audit',0)""",
+            """INSERT INTO legal_sources(id,firm_id,title,url,jurisdiction)
+               VALUES (:source,:firm,'Audit','','')""",
+            """INSERT INTO source_chunks(id,firm_id,source_id,position,content)
+               VALUES (:source_chunk,:firm,:source,0,'Audit')""",
+            """INSERT INTO stage_citations(id,firm_id,stage_id,source_chunk_id,excerpt)
+               VALUES (:legacy_citation,:firm,:stage,:source_chunk,'Original')""",
         ):
             connection.execute(text(sql), ids)
     migrate("upgrade", "head")
+    with tenant_transaction({"firm": uuid4(), "user": uuid4()}) as connection:
+        assert not connection.scalar(
+            text("SELECT EXISTS(SELECT FROM projects WHERE id=:project)"), ids
+        )
     with tenant_transaction(ids) as connection:
         assert connection.scalar(text("SELECT version_num FROM alembic_version")) == expected_head
-        assert connection.scalar(text("SELECT role FROM firm_members WHERE firm_id=:firm AND profile_id=:user"), ids) == "lawyer"
-        assert connection.scalar(text("SELECT owner_id FROM projects WHERE id=:project AND firm_id=:firm"), ids) == ids["user"]
-        assert connection.scalar(text("SELECT processing_status FROM projects WHERE id=:project AND firm_id=:firm"), ids) == "running"
-        assert connection.execute(text("SELECT sha256 FROM documents WHERE id=:document AND firm_id=:firm"), ids).one() == (None,)
+        assert connection.execute(
+            text("""
+            SELECT project_id, source_scope FROM stage_citations WHERE id=:legacy_citation AND firm_id=:firm
+        """),
+            ids,
+        ).one() == (ids["project"], str(ids["project"]))
+        assert (
+            connection.scalar(
+                text("SELECT role FROM firm_members WHERE firm_id=:firm AND profile_id=:user"), ids
+            )
+            == "lawyer"
+        )
+        assert (
+            connection.scalar(
+                text("SELECT owner_id FROM projects WHERE id=:project AND firm_id=:firm"), ids
+            )
+            == ids["user"]
+        )
+        assert (
+            connection.scalar(
+                text("SELECT processing_status FROM projects WHERE id=:project AND firm_id=:firm"),
+                ids,
+            )
+            == "running"
+        )
+        assert connection.execute(
+            text("SELECT sha256 FROM documents WHERE id=:document AND firm_id=:firm"), ids
+        ).one() == (None,)
         assert connection.execute(
             text(
                 "SELECT source_filename, embedding IS NULL, legacy_embedding::text FROM document_chunks WHERE id=:chunk AND firm_id=:firm"
-            ), ids
+            ),
+            ids,
         ).one() == ("old.txt", True, "[1,2,3]")
-        jobs = dict(connection.execute(text("SELECT id,status FROM generation_jobs WHERE firm_id=:firm"), ids).all())
+        jobs = dict(
+            connection.execute(
+                text("SELECT id,status FROM generation_jobs WHERE firm_id=:firm"), ids
+            ).all()
+        )
         assert jobs == {
             ids["job"]: "completed",
             ids["running"]: "running",
@@ -115,62 +186,88 @@ try:
         )
         assert table_count >= 16
     with tenant_transaction(ids) as connection:
-        connection.execute(text("""
+        connection.execute(
+            text("""
             UPDATE document_chunks SET embedding=array_fill(1::real,ARRAY[1536])::vector,
                 embedding_model='current', embedding_provider='audit' WHERE id=:chunk AND firm_id=:firm
-        """), ids)
-        connection.execute(text("""
+        """),
+            ids,
+        )
+        connection.execute(
+            text("""
             INSERT INTO document_chunks (id, firm_id, document_id, position, content, embedding, embedding_model, embedding_provider)
             VALUES (:new_chunk,:firm,:document,1,'new',array_fill(1::real,ARRAY[1536])::vector,'current','audit')
-        """), ids)
-        for sql in (
-            """INSERT INTO process_stages(id,firm_id,project_id,title,explanation,position)
-               VALUES (:stage,:firm,:project,'Stage','Audit',0)""",
-            """INSERT INTO legal_sources(id,firm_id,project_id,title,url,jurisdiction)
-               VALUES (:source,:firm,:project,'Audit','','')""",
-            """INSERT INTO source_chunks(id,firm_id,source_id,position,content)
-               VALUES (:source_chunk,:firm,:source,0,'Audit')""",
-        ):
-            connection.execute(text(sql), ids)
-    for target in ("document_chunk_id", "source_chunk_id"):
+        """),
+            ids,
+        )
+    for target, chunk in (("document_chunk_id", "chunk"), ("source_chunk_id", "source_chunk")):
         with tenant_transaction(ids) as connection:
-            if target == "document_chunk_id":
-                connection.execute(text("""
-                    INSERT INTO stage_citations(id,firm_id,stage_id,document_chunk_id,excerpt)
-                    VALUES (:citation,:firm,:stage,:chunk,'Audit')
-                """), ids)
-                expected_count = 1
-            else:
-                connection.execute(text("""
-                    INSERT INTO stage_citations(id,firm_id,stage_id,source_chunk_id,excerpt) VALUES
-                    (:citation,:firm,:stage,:source_chunk,'Audit'),
-                    (:duplicate,:firm,:stage,:source_chunk,'Audit')
-                """), ids)
-                expected_count = 2
-        attempt = subprocess.run([*command, "downgrade", step1], env=environment, cwd=REPOSITORY_ROOT,
-                                 capture_output=True, text=True)
+            connection.execute(
+                text(f"""
+                INSERT INTO stage_citations(id,firm_id,stage_id,{target},excerpt)
+                VALUES (:citation,:firm,:stage,:{chunk},'Audit')
+            """),
+                ids,
+            )
+        attempt = subprocess.run(
+            [*command, "downgrade", step1],
+            env=environment,
+            cwd=REPOSITORY_ROOT,
+            capture_output=True,
+            text=True,
+        )
         assert attempt.returncode != 0 and "Step 1 cannot represent" in attempt.stderr, (
             f"Expected a safe downgrade refusal for {target}"
         )
         with tenant_transaction(ids) as connection:
-            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == expected_head
-            assert connection.scalar(text("""
+            assert (
+                connection.scalar(text("SELECT version_num FROM alembic_version")) == expected_head
+            )
+            assert (
+                connection.scalar(
+                    text("""
                 SELECT count(*) FROM stage_citations WHERE firm_id=:firm AND stage_id=:stage
-            """), ids) == expected_count
-            connection.execute(text("""
-                DELETE FROM stage_citations WHERE firm_id=:firm AND stage_id=:stage
-            """), ids)
+            """),
+                    ids,
+                )
+                == 2
+            )
+            connection.execute(
+                text("""
+                DELETE FROM stage_citations WHERE firm_id=:firm AND id=:citation
+            """),
+                ids,
+            )
     migrate("downgrade", step1)
     with tenant_transaction(ids) as connection:
-        assert connection.scalar(text("SELECT role FROM firm_members WHERE firm_id=:firm AND profile_id=:user"), ids) == "member"
         assert connection.execute(
-            text("SELECT embedding::text, embedding_model FROM document_chunks WHERE id=:chunk"), ids
-        ).one() == ("[1,2,3]", "legacy-model")
-        assert connection.execute(text("""
-            SELECT vector_dims(embedding), embedding_model FROM document_chunks WHERE id=:new_chunk
-        """), ids).one() == (1536, "current")
+            text("""
+            SELECT source_chunk_id, excerpt FROM stage_citations WHERE id=:legacy_citation AND firm_id=:firm
+        """),
+            ids,
+        ).one() == (ids["source_chunk"], "Original")
         assert (
-            connection.scalar(text("SELECT status FROM generation_jobs WHERE id=:job"), ids)
+            connection.scalar(
+                text("SELECT role FROM firm_members WHERE firm_id=:firm AND profile_id=:user"), ids
+            )
+            == "member"
+        )
+        assert connection.execute(
+            text(
+                "SELECT embedding::text, embedding_model FROM document_chunks WHERE id=:chunk AND firm_id=:firm"
+            ),
+            ids,
+        ).one() == ("[1,2,3]", "legacy-model")
+        assert connection.execute(
+            text("""
+            SELECT vector_dims(embedding), embedding_model FROM document_chunks WHERE id=:new_chunk AND firm_id=:firm
+        """),
+            ids,
+        ).one() == (1536, "current")
+        assert (
+            connection.scalar(
+                text("SELECT status FROM generation_jobs WHERE id=:job AND firm_id=:firm"), ids
+            )
             == "succeeded"
         )
     migrate("downgrade", "base")

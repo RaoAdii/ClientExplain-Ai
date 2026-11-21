@@ -303,18 +303,39 @@ class StageCitation(Record, Tenant, Base):
     claim_text: Mapped[str] = mapped_column(Text, server_default="")
     validation_status: Mapped[str] = mapped_column(String(30), server_default="unverified")
     __table_args__ = (
-        ForeignKeyConstraint(["stage_id", "project_id", "firm_id"],
-                             ["process_stages.id", "process_stages.project_id", "process_stages.firm_id"], ondelete="CASCADE"),
-        ForeignKeyConstraint(["document_chunk_id", "document_id", "firm_id"],
-                             ["document_chunks.id", "document_chunks.document_id", "document_chunks.firm_id"], ondelete="CASCADE"),
-        ForeignKeyConstraint(["document_id", "project_id", "firm_id"],
-                             ["documents.id", "documents.project_id", "documents.firm_id"], ondelete="CASCADE"),
-        ForeignKeyConstraint(["source_chunk_id", "legal_source_id", "firm_id"],
-                             ["source_chunks.id", "source_chunks.source_id", "source_chunks.firm_id"], ondelete="CASCADE"),
-        ForeignKeyConstraint(["legal_source_id", "source_scope", "firm_id"],
-                             ["legal_sources.id", "legal_sources.citation_scope", "legal_sources.firm_id"], ondelete="CASCADE"),
-        CheckConstraint("document_chunk_id IS NULL OR document_id IS NOT NULL", name="ck_stage_citations_document_parent"),
-        CheckConstraint("source_chunk_id IS NULL OR (legal_source_id IS NOT NULL AND source_scope IS NOT NULL AND source_scope IN ('verified', project_id::text))", name="ck_stage_citations_source_scope"),
+        ForeignKeyConstraint(
+            ["stage_id", "project_id", "firm_id"],
+            ["process_stages.id", "process_stages.project_id", "process_stages.firm_id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["document_chunk_id", "document_id", "firm_id"],
+            ["document_chunks.id", "document_chunks.document_id", "document_chunks.firm_id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["document_id", "project_id", "firm_id"],
+            ["documents.id", "documents.project_id", "documents.firm_id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["source_chunk_id", "legal_source_id", "firm_id"],
+            ["source_chunks.id", "source_chunks.source_id", "source_chunks.firm_id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["legal_source_id", "source_scope", "firm_id"],
+            ["legal_sources.id", "legal_sources.citation_scope", "legal_sources.firm_id"],
+            ondelete="CASCADE",
+        ),
+        CheckConstraint(
+            "document_chunk_id IS NULL OR document_id IS NOT NULL",
+            name="ck_stage_citations_document_parent",
+        ),
+        CheckConstraint(
+            "source_chunk_id IS NULL OR (legal_source_id IS NOT NULL AND source_scope IS NOT NULL AND source_scope IN ('verified', project_id::text))",
+            name="ck_stage_citations_source_scope",
+        ),
         ForeignKeyConstraint(
             ["stage_id", "firm_id"],
             ["process_stages.id", "process_stages.firm_id"],
