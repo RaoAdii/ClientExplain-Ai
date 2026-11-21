@@ -66,7 +66,8 @@ def test_project_lifecycle(client, headers):
     url = f"/api/v1/projects/{project['id']}"
     assert client.get(url, headers=headers).json()["id"] == project["id"]
     assert any(
-        p["id"] == project["id"] for p in client.get("/api/v1/projects", headers=headers).json()
+        p["id"] == project["id"]
+        for p in client.get("/api/v1/projects", headers=headers).json()["items"]
     )
     assert (
         client.patch(url, headers=headers, json={"name": "Updated briefing"}).json()["name"]
@@ -100,11 +101,12 @@ def test_other_tenant_is_not_visible(client, headers):
         db.add_all([user, firm])
         db.flush()
         db.add(FirmMember(firm_id=firm.id, profile_id=user.id, role="owner"))
-        principal = Principal(user.id, firm.id)
+        principal = Principal(user.id, firm.id, "owner")
     app.dependency_overrides[get_principal] = lambda: principal
     try:
         assert not any(
-            p["id"] == project_id for p in client.get("/api/v1/projects", headers=headers).json()
+            p["id"] == project_id
+            for p in client.get("/api/v1/projects", headers=headers).json()["items"]
         )
         for method in ["get", "patch", "delete"]:
             kwargs = {"json": {"name": "Changed"}} if method == "patch" else {}

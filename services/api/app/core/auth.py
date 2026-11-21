@@ -6,6 +6,7 @@ import jwt
 from app.core.config import settings
 from app.db.session import SessionLocal
 from app.models.entities import Firm, FirmMember, Profile
+from app.schemas.auth import Role
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select, text
@@ -24,6 +25,7 @@ jwks = (
 class Principal:
     user_id: UUID
     firm_id: UUID
+    role: Role
 
 
 def get_principal(credentials: HTTPAuthorizationCredentials | None = Depends(bearer)) -> Principal:
@@ -35,7 +37,7 @@ def get_principal(credentials: HTTPAuthorizationCredentials | None = Depends(bea
     if settings.auth_mode == "development":
         if not hmac.compare_digest(token, settings.dev_auth_token):
             raise HTTPException(401, "Invalid development session")
-        return Principal(DEV_USER, DEV_FIRM)
+        return Principal(DEV_USER, DEV_FIRM, Role.OWNER)
     try:
         key = jwks.get_signing_key_from_jwt(token)
         claims = jwt.decode(
@@ -61,10 +63,11 @@ def get_principal(credentials: HTTPAuthorizationCredentials | None = Depends(bea
         member = db.scalar(
             select(FirmMember)
             .where(FirmMember.profile_id == user_id)
-            .order_by(FirmMember.created_at)
+            .order_by(FirmMember.created_at, FirmMember.id)
+            .limit(1)
         )
         if member:
-            return Principal(user_id, member.firm_id)
+            return Principal(user_id, member.firm_id, Role(member.role))
         if not db.get(Profile, user_id):
             db.add(Profile(id=user_id, display_name="Lawyer"))
             db.flush()
@@ -74,11 +77,8 @@ def get_principal(credentials: HTTPAuthorizationCredentials | None = Depends(bea
         )
         db.add(firm)
         db.flush()
-        db.execute(
-            text("SELECT set_config('app.firm_id', :firm_id, true)"), {"firm_id": str(firm.id)}
-        )
         db.add(FirmMember(profile_id=user_id, firm_id=firm.id, role="owner"))
-        return Principal(user_id, firm.id)
+        return Principal(user_id, firm.id, Role.OWNER)
 
 
 def tenant_session(principal: Principal = Depends(get_principal)):
