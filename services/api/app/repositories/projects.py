@@ -2,8 +2,8 @@ from uuid import UUID
 
 from app.models.entities import Project
 from app.schemas.projects import ReviewStatus, WorkflowStatus
-from sqlalchemy import func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy import func, or_, select, true
+from sqlalchemy.orm import Session, aliased
 
 
 def list_projects(
@@ -34,14 +34,25 @@ def list_projects(
         filters.append(Project.workflow_status == status)
     if review_status is not None:
         filters.append(Project.review_status == review_status)
-    total = db.scalar(select(func.count()).select_from(Project).where(*filters))
-    items = db.scalars(
+    totals = select(func.count().label("total")).select_from(Project).where(*filters).subquery()
+    page = (
         select(Project)
         .where(*filters)
         .order_by(Project.updated_at.desc(), Project.id)
         .limit(limit)
         .offset(offset)
+        .subquery()
+    )
+    item = aliased(Project, page)
+    # Anchor the outer join on the aggregate so an empty page still carries the total.
+    rows = db.execute(
+        select(totals.c.total, item)
+        .select_from(totals)
+        .outerjoin(item, true())
+        .order_by(item.updated_at.desc(), item.id)
     ).all()
+    total = rows[0][0]
+    items = [project for _, project in rows if project is not None]
     return {"items": items, "total": total, "limit": limit, "offset": offset}
 
 

@@ -6,8 +6,9 @@ from app.core.config import settings
 from app.db.session import SessionLocal
 from app.main import app
 from app.models.entities import AuditEvent, Project
+from app.repositories.projects import list_projects
 from fastapi.testclient import TestClient
-from sqlalchemy import delete
+from sqlalchemy import delete, event
 
 BASE = "/api/v1/projects"
 
@@ -61,6 +62,20 @@ def test_extended_fields_and_metadata_only_activity(client, project_ids):
     assert all(
         set(event) == {"id", "action", "actor_id", "created_at", "resource_id"} for event in events
     )
+
+
+def test_repeated_approval_records_one_review_transition(client, project_ids):
+    created = client.post(BASE, json={"name": "Review retry"}).json()
+    project_ids.append(UUID(created["id"]))
+    url = f"{BASE}/{created['id']}"
+    for _ in range(2):
+        response = client.patch(url, json={"review_status": "approved"})
+        assert response.status_code == 200
+        assert response.json()["review_status"] == "approved"
+    assert [entry["action"] for entry in client.get(url + "/activity").json()] == [
+        "project.review_changed",
+        "project.created",
+    ]
 
 
 def test_project_fields_are_bounded_and_server_fields_are_protected(client, project_ids):
@@ -129,3 +144,29 @@ def test_paginated_literal_search_and_combined_filters(client, project_ids):
     updated_id = max(project_ids[:2])
     assert client.patch(f"{BASE}/{updated_id}", json={"description": "Changed"}).status_code == 200
     assert client.get(BASE, params=filters).json()["items"][0]["id"] == str(updated_id)
+
+
+def test_empty_offset_page_and_total_share_a_snapshot_during_insert(project_ids):
+    marker = uuid4().hex
+
+    def insert_match():
+        project_id = uuid4()
+        with SessionLocal.begin() as writer:
+            writer.add(Project(id=project_id, firm_id=DEV_FIRM, created_by=DEV_USER, name=marker))
+        project_ids.append(project_id)
+
+    insert_match()
+    statements = []
+
+    def commit_after_first_query(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+        if len(statements) == 1:
+            insert_match()
+
+    with SessionLocal() as reader:
+        event.listen(reader.connection(), "after_cursor_execute", commit_after_first_query)
+        page = list_projects(reader, DEV_FIRM, limit=1, offset=1, search=marker)
+        assert page == {"items": [], "total": 1, "limit": 1, "offset": 1}
+        assert len(statements) == 1
+    with SessionLocal() as reader:
+        assert list_projects(reader, DEV_FIRM, limit=1, offset=1, search=marker)["total"] == 2

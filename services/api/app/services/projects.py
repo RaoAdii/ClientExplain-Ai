@@ -45,8 +45,9 @@ def update_project(db: Session, principal: Principal, project_id: UUID, data: Pr
     if data.review_status is not None:
         if not can_transition_review(principal.role, project.review_status, data.review_status):
             raise HTTPException(403, "Your role does not permit this review transition.")
-        project.review_status = data.review_status
-        audit(db, principal, "project.review_changed", project.id)
+        if project.review_status != data.review_status:
+            project.review_status = data.review_status
+            audit(db, principal, "project.review_changed", project.id)
     if metadata:
         for field, value in metadata.items():
             setattr(project, field, value)
