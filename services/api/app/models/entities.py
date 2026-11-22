@@ -407,6 +407,28 @@ class GenerationJob(ProjectChild, Base):
     )
 
 
+class JobRecovery(Record, Tenant, Base):
+    __tablename__ = "job_recoveries"
+    # Deliberately independent of job/project FKs: an intent must be insertable
+    # while another transaction holds FOR UPDATE on the generation_jobs row.
+    job_id: Mapped[uuid.UUID] = mapped_column(Uuid)
+    project_id: Mapped[uuid.UUID] = mapped_column(Uuid)
+    attempt_id: Mapped[uuid.UUID] = mapped_column(Uuid)
+    error_code: Mapped[str] = mapped_column(String(60))
+    retry_count: Mapped[int] = mapped_column(Integer)
+    __table_args__ = (
+        UniqueConstraint(
+            "firm_id", "project_id", "job_id", "attempt_id", name="uq_job_recoveries_attempt"
+        ),
+        Index("ix_job_recoveries_job", "job_id", "firm_id", "project_id"),
+        CheckConstraint(
+            "error_code IN ('timeout','database_unavailable','job_failed')",
+            name="ck_job_recoveries_safe_code",
+        ),
+        CheckConstraint("retry_count >= 0", name="ck_job_recoveries_retry_count"),
+    )
+
+
 class ProjectVersion(ProjectChild, Base):
     __tablename__ = "project_versions"
     version: Mapped[int] = mapped_column(Integer)

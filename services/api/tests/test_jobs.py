@@ -7,13 +7,13 @@ from uuid import uuid4
 import pytest
 from app.core.auth import DEV_FIRM, DEV_USER, Principal
 from app.db.session import SessionLocal
-from app.models.entities import Document, GenerationJob, Project
+from app.models.entities import Document, GenerationJob, JobRecovery, Project
 from app.schemas.auth import Role
 from app.schemas.jobs import JobRead
 from app.services.jobs import create_job, get_job, transition_job
 from celery.exceptions import Reject, SoftTimeLimitExceeded
 from fastapi import HTTPException
-from sqlalchemy import delete, event, func, select, update
+from sqlalchemy import delete, event, func, select, text, update
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.exc import TimeoutError as PoolTimeout
 from sqlalchemy.orm import with_loader_criteria
@@ -34,6 +34,7 @@ def project_id():
         project_id = project.id
     yield project_id
     with SessionLocal.begin() as db:
+        db.execute(delete(JobRecovery).where(JobRecovery.project_id == project_id))
         db.execute(delete(Project).where(Project.id == project_id))
 
 
@@ -507,9 +508,11 @@ def test_soft_timeout_discards_connection_without_rollback(project_id, monkeypat
             statement.startswith("UPDATE generation_jobs")
             and "finished_at" in statement.split("WHERE")[0]
         )
-        if (boundary == "claim_query" and statement.startswith("SELECT")) or (
-            boundary in {"terminal_query", "recovery_query"} and terminal
-        ):
+        if (
+            boundary == "claim_query"
+            and statement.startswith("SELECT")
+            and "FOR UPDATE" in statement
+        ) or (boundary in {"terminal_query", "recovery_query"} and terminal):
             interrupted = True
             raise SoftTimeLimitExceeded(PRIVATE_MARKER)
         return execute(cursor, statement, parameters, context)
@@ -517,8 +520,8 @@ def test_soft_timeout_discards_connection_without_rollback(project_id, monkeypat
     def deadline_commit(connection):
         nonlocal interrupted, commits
         commits += 1
-        if boundary in {"claim_commit", "recovery_commit"} or (
-            boundary == "terminal_commit" and commits == 2
+        if (boundary in {"claim_commit", "recovery_commit"} and commits == 2) or (
+            boundary == "terminal_commit" and commits == 3
         ):
             interrupted = True
             raise SoftTimeLimitExceeded(PRIVATE_MARKER)
@@ -570,3 +573,313 @@ def test_watchdog_preserves_fresh_and_terminal_jobs(project_id):
             "job_failed",
             original_finish,
         )
+
+
+@pytest.mark.parametrize("metadata_write", [1, 2])
+def test_soft_deadline_during_metadata_write_never_rolls_back(
+    project_id, monkeypatch, metadata_write
+):
+    celery.loader.import_default_modules()
+    task = celery.tasks["worker.analyze_project"]
+    with SessionLocal.begin() as db:
+        job = create_job(db, OWNER, project_id, "analysis", DIGEST, None)
+    interrupted = False
+    writes = 0
+    after_deadline = []
+    rollback = engine.dialect.do_rollback
+
+    def deadline(conn, cursor, statement, params, context, executemany):
+        nonlocal interrupted, writes
+        if statement.startswith("UPDATE generation_jobs") and "request_metadata" in statement:
+            writes += 1
+            if writes == metadata_write:
+                interrupted = True
+                raise SoftTimeLimitExceeded()
+
+    def observe_rollback(connection):
+        if interrupted:
+            after_deadline.append("rollback")
+        return rollback(connection)
+
+    monkeypatch.setattr(engine.dialect, "do_rollback", observe_rollback)
+    event.listen(engine, "before_cursor_execute", deadline)
+    try:
+        result = task.apply(args=[str(job.id)], throw=False)
+    finally:
+        event.remove(engine, "before_cursor_execute", deadline)
+    assert result.successful(), result.result
+    assert interrupted and after_deadline == []
+
+
+@pytest.mark.parametrize("watchdog_first", [True, False])
+def test_terminal_recovery_cause_and_count_win_over_watchdog(project_id, watchdog_first):
+    celery.loader.import_default_modules()
+    with SessionLocal.begin() as db:
+        job = create_job(db, OWNER, project_id, "analysis", DIGEST, None)
+    age_job(job.id)
+    if watchdog_first:
+        run_watchdog_for(project_id)
+    celery.tasks["worker.analyze_project"].apply(
+        args=[str(job.id)],
+        headers={"job_terminal_code": "database_unavailable", "job_processing_retries": 3},
+        throw=True,
+    )
+    run_watchdog_for(project_id)
+    with SessionLocal() as db:
+        saved = get_job(db, OWNER, job.id)
+        assert (saved.status, saved.error_code, saved.retry_count) == (
+            "failed",
+            "database_unavailable",
+            3,
+        )
+
+
+@pytest.mark.parametrize("conflicting_scope", [False, True])
+def test_fresh_locked_timeout_survives_failed_publication_and_headerless_replay(
+    project_id, monkeypatch, conflicting_scope
+):
+    celery.loader.import_default_modules()
+    task = celery.tasks["worker.analyze_project"]
+    delivery_id = str(uuid4())
+    with SessionLocal.begin() as db:
+        job = create_job(db, OWNER, project_id, "analysis", DIGEST, None)
+        if conflicting_scope:
+            db.add(
+                JobRecovery(
+                    job_id=job.id,
+                    project_id=uuid4(),
+                    firm_id=DEV_FIRM,
+                    attempt_id=delivery_id,
+                    error_code="job_failed",
+                    retry_count=0,
+                )
+            )
+
+    def quick_lock_deadline(connection):
+        connection.exec_driver_sql("SET LOCAL lock_timeout = '50ms'")
+
+    def broker_unavailable(*args, **kwargs):
+        raise Reject("Retry publication failed.", requeue=False)
+
+    monkeypatch.setattr(task, "retry", broker_unavailable)
+    event.listen(engine, "begin", quick_lock_deadline)
+    try:
+        with SessionLocal.begin() as locker:
+            locker.scalar(select(GenerationJob).where(GenerationJob.id == job.id).with_for_update())
+            task.apply(args=[str(job.id)], task_id=delivery_id, retries=3, throw=False)
+            with SessionLocal() as db:
+                intent = db.scalar(
+                    select(JobRecovery).where(
+                        JobRecovery.job_id == job.id, JobRecovery.project_id == project_id
+                    )
+                )
+                assert intent is not None
+                assert (intent.error_code, intent.retry_count) == ("timeout", 3)
+    finally:
+        event.remove(engine, "begin", quick_lock_deadline)
+    # Requeue preserves neither terminal headers nor enough age for watchdog expiry.
+    task.apply(args=[str(job.id)], task_id=delivery_id, retries=3, throw=True)
+    run_watchdog_for(project_id)
+    with SessionLocal() as db:
+        saved = get_job(db, OWNER, job.id)
+        assert (saved.status, saved.error_code, saved.retry_count) == ("failed", "timeout", 3)
+        assert (
+            db.scalar(
+                select(func.count()).select_from(JobRecovery).where(JobRecovery.job_id == job.id)
+            )
+            == 0
+        )
+
+
+@pytest.mark.parametrize("stale", [False, True])
+def test_watchdog_honors_pending_cause_before_default_expiry(project_id, stale):
+    celery.loader.import_default_modules()
+    with SessionLocal.begin() as db:
+        job = create_job(db, OWNER, project_id, "analysis", DIGEST, None)
+        db.add(
+            JobRecovery(
+                job_id=job.id,
+                project_id=project_id,
+                firm_id=DEV_FIRM,
+                attempt_id=uuid4(),
+                error_code="database_unavailable",
+                retry_count=3,
+            )
+        )
+    if stale:
+        age_job(job.id)
+    run_watchdog_for(project_id)
+    with SessionLocal() as db:
+        saved = get_job(db, OWNER, job.id)
+        assert (saved.status, saved.error_code, saved.retry_count) == (
+            "failed",
+            "database_unavailable",
+            3,
+        )
+        assert (
+            db.scalar(
+                select(func.count()).select_from(JobRecovery).where(JobRecovery.job_id == job.id)
+            )
+            == 0
+        )
+
+
+def test_intent_inserted_during_watchdog_snapshot_survives_to_next_pass(project_id):
+    celery.loader.import_default_modules()
+    with SessionLocal.begin() as db:
+        job = create_job(db, OWNER, project_id, "analysis", DIGEST, None)
+    age_job(job.id)
+    inserted = False
+
+    def late_intent(conn, cursor, statement, params, context, executemany):
+        nonlocal inserted
+        if not inserted and statement.startswith("SELECT job_recoveries."):
+            inserted = True
+            with SessionLocal.begin() as db:
+                db.add(
+                    JobRecovery(
+                        job_id=job.id,
+                        project_id=project_id,
+                        firm_id=DEV_FIRM,
+                        attempt_id=uuid4(),
+                        error_code="database_unavailable",
+                        retry_count=3,
+                    )
+                )
+
+    event.listen(engine, "after_cursor_execute", late_intent)
+    try:
+        run_watchdog_for(project_id)
+    finally:
+        event.remove(engine, "after_cursor_execute", late_intent)
+    with SessionLocal() as db:
+        assert inserted and get_job(db, OWNER, job.id).error_code == "timeout"
+        assert (
+            db.scalar(
+                select(func.count()).select_from(JobRecovery).where(JobRecovery.job_id == job.id)
+            )
+            == 1
+        )
+    run_watchdog_for(project_id)
+    with SessionLocal() as db:
+        saved = get_job(db, OWNER, job.id)
+        assert (saved.error_code, saved.retry_count) == ("database_unavailable", 3)
+        assert (
+            db.scalar(
+                select(func.count()).select_from(JobRecovery).where(JobRecovery.job_id == job.id)
+            )
+            == 0
+        )
+
+
+def test_recovery_intents_enforce_safe_codes_uniqueness_and_tenant_scope(project_id):
+    with SessionLocal.begin() as db:
+        job = create_job(db, OWNER, project_id, "analysis", DIGEST, None)
+        attempt = uuid4()
+        db.add(
+            JobRecovery(
+                job_id=job.id,
+                project_id=project_id,
+                firm_id=DEV_FIRM,
+                attempt_id=attempt,
+                error_code="timeout",
+                retry_count=3,
+            )
+        )
+    with SessionLocal.begin() as db:
+        for code, retry_count, attempt_id in [
+            ("private SQL", 3, uuid4()),
+            ("timeout", -1, uuid4()),
+            ("timeout", 3, attempt),
+        ]:
+            with pytest.raises(IntegrityError), db.begin_nested():
+                db.add(
+                    JobRecovery(
+                        job_id=job.id,
+                        project_id=project_id,
+                        firm_id=DEV_FIRM,
+                        attempt_id=attempt_id,
+                        error_code=code,
+                        retry_count=retry_count,
+                    )
+                )
+                db.flush()
+    with SessionLocal.begin() as db:
+        db.execute(text("CREATE ROLE ce_test_recovery_rls NOLOGIN NOBYPASSRLS"))
+        db.execute(text("GRANT USAGE ON SCHEMA public TO ce_test_recovery_rls"))
+        db.execute(text("GRANT SELECT ON job_recoveries TO ce_test_recovery_rls"))
+        db.execute(text("SET LOCAL ROLE ce_test_recovery_rls"))
+        assert db.scalar(select(func.count()).select_from(JobRecovery)) == 0
+        db.execute(text("SELECT set_config('app.firm_id', :firm, true)"), {"firm": str(uuid4())})
+        assert db.scalar(select(func.count()).select_from(JobRecovery)) == 0
+        db.execute(text("SELECT set_config('app.firm_id', :firm, true)"), {"firm": str(DEV_FIRM)})
+        assert (
+            db.scalar(
+                select(func.count()).select_from(JobRecovery).where(JobRecovery.job_id == job.id)
+            )
+            == 1
+        )
+        db.rollback()  # Roll back the test role and grants, as well as SET LOCAL.
+
+
+def test_watchdog_discards_intent_for_deleted_document_without_changing_job(project_id):
+    celery.loader.import_default_modules()
+    with SessionLocal.begin() as db:
+        document = add_document(db, project_id)
+        job = create_job(db, OWNER, project_id, "parse", DIGEST, None, document_id=document.id)
+        db.add(
+            JobRecovery(
+                job_id=job.id,
+                project_id=project_id,
+                firm_id=DEV_FIRM,
+                attempt_id=uuid4(),
+                error_code="database_unavailable",
+                retry_count=3,
+            )
+        )
+        document.deleted_at = datetime.now(UTC)
+    run_watchdog_for(project_id)
+    with SessionLocal() as db:
+        assert get_job(db, OWNER, job.id).status == "queued"
+        assert (
+            db.scalar(
+                select(func.count()).select_from(JobRecovery).where(JobRecovery.job_id == job.id)
+            )
+            == 0
+        )
+
+
+def test_retry_count_raised_after_watchdog_snapshot_survives_cleanup(project_id):
+    celery.loader.import_default_modules()
+    with SessionLocal.begin() as db:
+        job = create_job(db, OWNER, project_id, "analysis", DIGEST, None)
+        db.add(
+            JobRecovery(
+                job_id=job.id,
+                project_id=project_id,
+                firm_id=DEV_FIRM,
+                attempt_id=uuid4(),
+                error_code="database_unavailable",
+                retry_count=1,
+            )
+        )
+    raised_count = False
+
+    def later_retry_count(conn, cursor, statement, params, context, executemany):
+        nonlocal raised_count
+        if not raised_count and statement.startswith("SELECT job_recoveries."):
+            raised_count = True
+            with SessionLocal.begin() as db:
+                db.execute(
+                    update(JobRecovery).where(JobRecovery.job_id == job.id).values(retry_count=3)
+                )
+
+    event.listen(engine, "after_cursor_execute", later_retry_count)
+    try:
+        run_watchdog_for(project_id)
+    finally:
+        event.remove(engine, "after_cursor_execute", later_retry_count)
+    run_watchdog_for(project_id)
+    with SessionLocal() as db:
+        saved = get_job(db, OWNER, job.id)
+        assert raised_count and (saved.error_code, saved.retry_count) == ("database_unavailable", 3)

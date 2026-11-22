@@ -152,6 +152,35 @@ try:
         ):
             connection.execute(text(sql), ids)
     migrate("upgrade", "head")
+    if use_owner_role:
+        with audit.begin() as connection:
+            connection.execute(
+                text("GRANT SELECT, INSERT, UPDATE, DELETE ON job_recoveries TO pg_database_owner")
+            )
+    recovery_ids = {**ids, "recovery": uuid4(), "attempt": uuid4()}
+    with tenant_transaction(ids) as connection:
+        connection.execute(
+            text("""
+            INSERT INTO job_recoveries
+                (id,firm_id,project_id,job_id,attempt_id,error_code,retry_count)
+            VALUES (:recovery,:firm,:project,:queued,:attempt,'database_unavailable',3)
+        """),
+            recovery_ids,
+        )
+    with tenant_transaction({"firm": uuid4(), "user": uuid4()}) as connection:
+        assert not connection.scalar(
+            text("SELECT EXISTS(SELECT FROM job_recoveries WHERE id=:recovery)"), recovery_ids
+        )
+    expect_downgrade_refusal("Pending job recovery intents must be reconciled")
+    with tenant_transaction(ids) as connection:
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == expected_head
+        assert connection.execute(
+            text("SELECT error_code,retry_count FROM job_recoveries WHERE id=:recovery"),
+            recovery_ids,
+        ).one() == ("database_unavailable", 3)
+        connection.execute(text("DELETE FROM job_recoveries WHERE id=:recovery"), recovery_ids)
+    migrate("downgrade", "a27d9c4e8b11")
+    migrate("upgrade", "head")
     with tenant_transaction({"firm": uuid4(), "user": uuid4()}) as connection:
         assert not connection.scalar(
             text("SELECT EXISTS(SELECT FROM projects WHERE id=:project)"), ids
@@ -350,7 +379,9 @@ try:
     migrate("downgrade", "base")
     migrate("upgrade", "head")
     migrate("check")
-    print("Disposable migration audit passed: upgrade, downgrade, and re-upgrade.")
+    print(
+        "Disposable migration audit passed: upgrade, recovery intent/RLS/downgrade guard, downgrade, and re-upgrade."
+    )
 finally:
     audit.dispose()
     with admin.connect() as connection:
