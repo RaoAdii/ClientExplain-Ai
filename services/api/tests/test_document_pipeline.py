@@ -4,16 +4,18 @@ from io import BytesIO
 from uuid import uuid4
 from zipfile import ZIP_DEFLATED, ZipFile
 
+import httpx
 import pymupdf
 import pytest
 from app.core.auth import DEV_FIRM, DEV_USER, Principal
 from app.db.session import SessionLocal
-from app.integrations.storage import LocalPrivateStorage
+from app.integrations.storage import LocalPrivateStorage, SupabasePrivateStorage
 from app.models.entities import Document, DocumentChunk, GenerationJob, Project
 from app.schemas.auth import Role
 from app.services.jobs import create_job
 from celery.exceptions import SoftTimeLimitExceeded
 from docx import Document as DocxDocument
+from docx.oxml import OxmlElement
 from sqlalchemy import delete, event, select
 from worker.celery_app import app as celery
 from worker.pipelines.chunking import chunk_document
@@ -45,6 +47,77 @@ def docx_bytes():
     output = BytesIO()
     doc.save(output)
     return output.getvalue()
+
+
+@pytest.fixture
+def nested_docx_bytes():
+    doc = DocxDocument()
+    doc.add_paragraph("Before table.")
+    table = doc.add_table(rows=3, cols=2)
+    table.cell(0, 0).merge(table.cell(0, 1)).text = "Horizontal clause."
+    table.cell(1, 0).merge(table.cell(2, 0)).text = "Vertical clause."
+    cell = table.cell(1, 1)
+    cell.text = "Before nested."
+    nested = cell.add_table(rows=1, cols=1).cell(0, 0)
+    nested.text = "Nested clause."
+    nested.add_paragraph("Nested heading", style="Heading 2")
+    nested.add_table(rows=1, cols=1).cell(0, 0).text = "Deep clause."
+    cell.add_paragraph("After nested.")
+    table.cell(2, 1).text = "Final cell."
+    # Content controls are block containers, including within table cells.
+    wrapped = doc.add_paragraph("Wrapped clause.")
+    control = OxmlElement("w:sdt")
+    contents = OxmlElement("w:sdtContent")
+    wrapped._p.addprevious(control)
+    control.append(contents)
+    contents.append(wrapped._p)
+    doc.add_paragraph("After table.")
+    output = BytesIO()
+    doc.save(output)
+    return output.getvalue()
+
+
+def test_docx_nested_blocks_preserve_each_physical_paragraph_once(nested_docx_bytes):
+    extracted = parse_document_bytes(DOCX, nested_docx_bytes)
+    assert extracted.text.splitlines() == [
+        "Before table.",
+        "Horizontal clause.",
+        "Vertical clause.",
+        "Before nested.",
+        "Nested clause.",
+        "Nested heading",
+        "Deep clause.",
+        "After nested.",
+        "Final cell.",
+        "Wrapped clause.",
+        "After table.",
+    ]
+    assert [(heading.text, heading.level) for heading in extracted.headings] == [
+        ("Nested heading", 2)
+    ]
+    heading = extracted.headings[0]
+    assert extracted.text[heading.char_start : heading.char_end] == "Nested heading"
+
+
+def test_docx_grid_span_does_not_expand_physical_cell_text(monkeypatch):
+    import worker.pipelines.documents as parsers
+
+    doc = DocxDocument()
+    cell = doc.add_table(rows=1, cols=1).cell(0, 0)
+    cell.text = "One clause."
+    cell._tc.get_or_add_tcPr().get_or_add_gridSpan().val = 1000
+    output = BytesIO()
+    doc.save(output)
+    monkeypatch.setattr(parsers, "MAX_TEXT_CHARS", 100)
+    assert parse_document_bytes(DOCX, output.getvalue()).text == "One clause."
+
+
+def test_docx_nested_content_obeys_total_text_limit(monkeypatch, nested_docx_bytes):
+    import worker.pipelines.documents as parsers
+
+    monkeypatch.setattr(parsers, "MAX_TEXT_CHARS", 40)
+    with pytest.raises(DocumentParseError, match="too much text"):
+        parse_document_bytes(DOCX, nested_docx_bytes)
 
 
 def test_pdf_preserves_ordered_pages_and_exact_quotes():
@@ -200,6 +273,99 @@ def stored_document(tmp_path, monkeypatch):
 
 def run_parse(ids):
     return celery.tasks["worker.parse_document"].apply(args=[str(ids[1]), str(ids[2])], throw=True)
+
+
+@pytest.mark.parametrize("recover", [True, False], ids=["recovers", "exhausted"])
+@pytest.mark.parametrize(
+    "fault,code",
+    [
+        ("connect", "database_unavailable"),
+        ("read_timeout", "timeout"),
+        (408, "database_unavailable"),
+        (429, "database_unavailable"),
+        (500, "database_unavailable"),
+        (502, "database_unavailable"),
+        (503, "database_unavailable"),
+        (504, "database_unavailable"),
+    ],
+)
+def test_supabase_reads_follow_job_retry_policy(stored_document, monkeypatch, recover, fault, code):
+    import worker.tasks.documents as tasks
+
+    ids, local = stored_document
+    with SessionLocal() as db:
+        key = db.get(Document, ids[1]).storage_key
+    with local.open(key) as stream:
+        content = stream.read()
+    attempts = 0
+
+    def respond(request):
+        nonlocal attempts
+        if request.url.path == "/storage/v1/bucket/private-documents":
+            return httpx.Response(200, json={"public": False})
+        assert request.url.path == f"/storage/v1/object/private-documents/{key}"
+        attempts += 1
+        if not recover or attempts == 1:
+            if fault == "connect":
+                raise httpx.ConnectError("private-storage-marker", request=request)
+            if fault == "read_timeout":
+                raise httpx.ReadTimeout("private-storage-marker", request=request)
+            return httpx.Response(fault, text="private-storage-marker")
+        return httpx.Response(200, content=content)
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as client:
+        storage = SupabasePrivateStorage(
+            "https://storage.example.test", "private-documents", "server-secret", client=client
+        )
+        monkeypatch.setattr(tasks, "get_storage", lambda: storage)
+        result = celery.tasks["worker.parse_document"].apply(
+            args=[str(ids[1]), str(ids[2])], throw=False
+        )
+    assert result.successful(), result.result
+    assert attempts == (2 if recover else 4)
+    with SessionLocal() as db:
+        job = db.get(GenerationJob, ids[2])
+        assert (job.status, job.retry_count, job.error_code) == (
+            ("completed", 1, None) if recover else ("failed", 3, code)
+        )
+        if recover:
+            assert db.get(Document, ids[1]).status == "completed"
+            assert (
+                db.scalars(select(DocumentChunk).where(DocumentChunk.document_id == ids[1])).first()
+                is not None
+            )
+        else:
+            assert "private-storage-marker" not in job.error_message
+            assert not db.scalars(
+                select(DocumentChunk).where(DocumentChunk.document_id == ids[1])
+            ).all()
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 422])
+def test_permanent_supabase_read_errors_are_not_retried(stored_document, monkeypatch, status):
+    import worker.tasks.documents as tasks
+
+    ids, _ = stored_document
+    attempts = 0
+
+    def respond(request):
+        nonlocal attempts
+        if request.url.path == "/storage/v1/bucket/private-documents":
+            return httpx.Response(200, json={"public": False})
+        attempts += 1
+        return httpx.Response(status, text="private-storage-marker")
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as client:
+        storage = SupabasePrivateStorage(
+            "https://storage.example.test", "private-documents", "server-secret", client=client
+        )
+        monkeypatch.setattr(tasks, "get_storage", lambda: storage)
+        run_parse(ids)
+    assert attempts == 1
+    with SessionLocal() as db:
+        job = db.get(GenerationJob, ids[2])
+        assert (job.status, job.retry_count, job.error_code) == ("failed", 0, "job_failed")
+        assert "private-storage-marker" not in job.error_message
 
 
 def test_parse_completes_and_replays_without_replacing_matching_chunks(stored_document):

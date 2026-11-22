@@ -2,6 +2,7 @@ from contextlib import contextmanager
 from datetime import timedelta
 from uuid import NAMESPACE_URL, UUID, uuid5
 
+import httpx
 from app.core.config import settings
 from app.models.entities import Document, GenerationJob, JobRecovery
 from app.schemas.jobs import JobType
@@ -77,8 +78,13 @@ def _connection_failure(exc: DBAPIError) -> bool:
 
 
 def _failure_policy(exc: Exception) -> tuple[str, bool]:
-    if isinstance(exc, TimeoutError):
+    if isinstance(exc, (TimeoutError, httpx.TimeoutException)):
         return "timeout", True
+    if isinstance(exc, (httpx.NetworkError, httpx.RemoteProtocolError)) or (
+        isinstance(exc, httpx.HTTPStatusError)
+        and exc.response.status_code in {408, 429, 500, 502, 503, 504}
+    ):
+        return "database_unavailable", True
     if isinstance(exc, DBAPIError) and getattr(exc.orig, "sqlstate", None) in {"55P03", "57014"}:
         return "timeout", True
     if isinstance(exc, (ConnectionError, PoolTimeout)) or (

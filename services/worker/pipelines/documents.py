@@ -9,10 +9,9 @@ import pymupdf
 from celery.exceptions import SoftTimeLimitExceeded
 from docx import Document
 from docx.oxml.ns import qn
-from docx.table import Table
 from docx.text.paragraph import Paragraph
 
-PARSER_VERSION = "1"
+PARSER_VERSION = "2"
 MAX_INPUT_BYTES = 25 * 1024 * 1024
 MAX_TEXT_CHARS = 2_000_000
 MAX_PAGES = 1000
@@ -111,21 +110,17 @@ def _docx(content: bytes) -> ExtractedDocument:
         document = Document(BytesIO(content))
         parts, headings = [], []
         size = 0
-        for element in document.element.body:
+        # Walk physical paragraphs in XML order, including nested tables and
+        # block containers. Table.rows/cells expands grid spans and aliases
+        # merged cells; cell.text also omits nested tables. XML traversal visits
+        # each stored paragraph once without allocating a rendered cell grid.
+        for element in document.element.body.iter(qn("w:p")):
             heading_level = None
-            if element.tag == qn("w:p"):
-                paragraph = Paragraph(element, document)
-                text = _normalize(paragraph.text)
-                style = paragraph.style.name if paragraph.style else ""
-                if style.startswith("Heading ") and style[8:].isdigit():
-                    heading_level = int(style[8:])
-            elif element.tag == qn("w:tbl"):
-                table = Table(element, document)
-                text = _normalize(
-                    "\n".join("\t".join(cell.text for cell in row.cells) for row in table.rows)
-                )
-            else:
-                continue
+            paragraph = Paragraph(element, document)
+            text = _normalize(paragraph.text)
+            style = paragraph.style.name if paragraph.style else ""
+            if style.startswith("Heading ") and style[8:].isdigit():
+                heading_level = int(style[8:])
             if not text:
                 continue
             start = size + (1 if parts else 0)
