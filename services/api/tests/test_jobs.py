@@ -219,9 +219,8 @@ def test_worker_recovers_a_lost_db_connection_and_acknowledges_redelivery(projec
     assert result.successful(), result.result
     with SessionLocal() as db:
         saved = get_job(db, OWNER, job.id)
-        # Parse now reaches storage; this legacy fixture has no private object.
-        expected_code = "job_failed" if kind == "parse" else "pipeline_unavailable"
-        assert (saved.status, saved.error_code) == ("failed", expected_code)
+        # Both pipelines now run: parse lacks a stored object and analysis is disabled.
+        assert (saved.status, saved.error_code) == ("failed", "job_failed")
         assert saved.retry_count == 1
         finished_at = saved.finished_at
     task.apply(args=[*prefix, str(job.id)], throw=True)
@@ -293,8 +292,8 @@ def test_parse_submission_binds_live_document_and_scopes_replay(project_id):
 @pytest.mark.parametrize(
     ("faults", "expected", "retries"),
     [
-        (["connect"], "pipeline_unavailable", 1),
-        (["network_timeout"], "pipeline_unavailable", 1),
+        (["connect"], "job_failed", 1),
+        (["network_timeout"], "job_failed", 1),
         (["constraint"], "job_failed", 0),
         (["timeout"], "timeout", 0),
         (["connect"] * 4, "database_unavailable", 3),
@@ -404,14 +403,15 @@ def test_soft_deadline_avoids_io_and_timeout_survives_broker_replay(project_id, 
     finally:
         event.remove(engine, "before_cursor_execute", deadline)
     assert interrupted and recovery_io == []
-    # The original ID-only delivery can arrive again without terminal headers.
+    # The real analysis pipeline records its disabled-provider failure intent
+    # before terminal persistence; replay must retain that original safe cause.
     task.apply(args=[str(job.id)], throw=True)
     with SessionLocal() as db:
-        assert get_job(db, OWNER, job.id).status == "running"
+        assert get_job(db, OWNER, job.id).status == "failed"
     age_job(job.id)
     run_watchdog_for(project_id)
     with SessionLocal() as db:
-        assert get_job(db, OWNER, job.id).error_code == "timeout"
+        assert get_job(db, OWNER, job.id).error_code == "job_failed"
 
 
 def test_timeout_cause_survives_failed_recovery_publish_and_original_replay(
@@ -451,7 +451,7 @@ def test_timeout_cause_survives_failed_recovery_publish_and_original_replay(
     run_watchdog_for(project_id)
     with SessionLocal() as db:
         saved = get_job(db, OWNER, job.id)
-        assert (saved.status, saved.error_code) == ("failed", "timeout")
+        assert (saved.status, saved.error_code) == ("failed", "job_failed")
 
 
 @pytest.mark.parametrize("kind", ["analysis", "parse"])
@@ -552,7 +552,10 @@ def test_soft_timeout_discards_connection_without_rollback(project_id, monkeypat
     run_watchdog_for(project_id)
     with SessionLocal() as db:
         saved = get_job(db, OWNER, job.id)
-        assert (saved.status, saved.error_code) == ("failed", "timeout")
+        # A terminal-query interruption occurs after the disabled-provider
+        # failure intent is durable. Earlier deadlines still resolve to timeout.
+        expected_code = "job_failed" if boundary == "terminal_query" else "timeout"
+        assert (saved.status, saved.error_code) == ("failed", expected_code)
 
 
 def test_watchdog_preserves_fresh_and_terminal_jobs(project_id):

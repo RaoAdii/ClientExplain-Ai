@@ -4,6 +4,7 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 
 import httpx
 from app.core.config import settings
+from app.integrations.openai_provider import ProviderError, ProviderTimeout
 from app.models.entities import Document, GenerationJob, JobRecovery
 from app.schemas.jobs import JobType
 from app.services.jobs import SAFE_ERRORS, transition_job
@@ -78,6 +79,8 @@ def _connection_failure(exc: DBAPIError) -> bool:
 
 
 def _failure_policy(exc: Exception) -> tuple[str, bool]:
+    if isinstance(exc, ProviderError):
+        return ("timeout" if isinstance(exc, ProviderTimeout) else "job_failed"), exc.retryable
     if isinstance(exc, (TimeoutError, httpx.TimeoutException)):
         return "timeout", True
     if isinstance(exc, (httpx.NetworkError, httpx.RemoteProtocolError)) or (
