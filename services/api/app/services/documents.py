@@ -1,5 +1,6 @@
 import codecs
 import hashlib
+import logging
 from pathlib import PurePosixPath
 from tempfile import TemporaryFile
 from uuid import UUID, uuid4
@@ -18,6 +19,8 @@ from app.services.projects import require_project
 from celery import Celery
 from fastapi import HTTPException, UploadFile
 from sqlalchemy import delete, text
+
+log = logging.getLogger("clientexplain")
 
 CHUNK_BYTES = 64 * 1024
 MEDIA_TYPES = {
@@ -98,6 +101,34 @@ def duplicate_error(document):
     raise HTTPException(409, {"document_id": str(document.id), "status": document.status})
 
 
+def compensate_dispatch(principal, project_id, document_id, job_id):
+    # Each attempt owns a fresh transaction, including after commit/rollback
+    # errors. Deletion is idempotent if an earlier commit's result was uncertain.
+    for attempt in range(3):
+        try:
+            with SessionLocal.begin() as cleanup:
+                tenant_context(cleanup, principal)
+                cleanup.execute(
+                    delete(GenerationJob).where(
+                        GenerationJob.id == job_id,
+                        GenerationJob.firm_id == principal.firm_id,
+                        GenerationJob.project_id == project_id,
+                    )
+                )
+                cleanup.execute(
+                    delete(Document).where(
+                        Document.id == document_id,
+                        Document.firm_id == principal.firm_id,
+                        Document.project_id == project_id,
+                    )
+                )
+            return
+        except Exception:
+            if attempt == 2:
+                log.error("Dispatch compensation database cleanup failed after three attempts")
+                raise
+
+
 def upload_document(principal: Principal, project_id: UUID, upload: UploadFile) -> UploadRead:
     check_roles(principal, *PROJECT_EDITORS)
     key = None
@@ -136,30 +167,23 @@ def upload_document(principal: Principal, project_id: UUID, upload: UploadFile) 
         dispatch_parse(document_id, job_id)
         return result
     except Exception as exc:
-        if committed:
-            with SessionLocal.begin() as cleanup:
-                tenant_context(cleanup, principal)
-                cleanup.execute(
-                    delete(GenerationJob).where(
-                        GenerationJob.id == job_id,
-                        GenerationJob.firm_id == principal.firm_id,
-                        GenerationJob.project_id == project_id,
-                    )
-                )
-                cleanup.execute(
-                    delete(Document).where(
-                        Document.id == document_id,
-                        Document.firm_id == principal.firm_id,
-                        Document.project_id == project_id,
-                    )
-                )
-        if storage is not None and key is not None:
-            try:
-                storage.delete(key)
-            except Exception:
-                raise HTTPException(
-                    503, "Document storage is unavailable. Try again shortly."
-                ) from None
+        try:
+            if committed:
+                compensate_dispatch(principal, project_id, document_id, job_id)
+        except Exception:
+            raise HTTPException(
+                503, "The upload could not be completed. Try again shortly."
+            ) from None
+        finally:
+            # Private bytes must be cleaned even when database compensation (or
+            # its rollback) raises. Never broaden deletion beyond this key.
+            if storage is not None and key is not None:
+                try:
+                    storage.delete(key)
+                except Exception:
+                    raise HTTPException(
+                        503, "Document storage is unavailable. Try again shortly."
+                    ) from None
         if isinstance(exc, HTTPException):
             raise
         raise HTTPException(503, "The upload could not be completed. Try again shortly.") from None

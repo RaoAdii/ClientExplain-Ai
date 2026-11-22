@@ -12,6 +12,7 @@ from starlette.exceptions import HTTPException
 
 from app.api.routes import router
 from app.core.config import settings
+from app.core.upload_limits import UploadBodyLimit
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("clientexplain")
@@ -29,6 +30,7 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type"],
     allow_credentials=False,
 )
+app.add_middleware(UploadBodyLimit)
 app.include_router(router)
 
 

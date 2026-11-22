@@ -1,9 +1,11 @@
+import asyncio
 import hashlib
 import sys
 from io import BytesIO
 from uuid import UUID, uuid4
 from zipfile import ZipFile
 
+import httpx
 import pytest
 from app.core.auth import DEV_FIRM, DEV_USER, Principal, get_principal
 from app.core.config import MAX_UPLOAD_BYTES, settings
@@ -17,7 +19,8 @@ from celery import Celery
 from fastapi.testclient import TestClient
 from sqlalchemy import delete, select
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import SessionTransaction
+from sqlalchemy.orm import Session, SessionTransaction
+from starlette import formparsers
 
 
 def docx():
@@ -140,6 +143,64 @@ def test_exact_25_mib_boundary_is_accepted(upload_env):
     assert response.json()["document"]["byte_size"] == MAX_UPLOAD_BYTES
 
 
+@pytest.mark.parametrize("declared_length", [None, "1", "1000000"])
+def test_direct_api_bounds_multipart_spooling_before_admission(
+    upload_env, monkeypatch, declared_length
+):
+    _, url, _, _, _, _ = upload_env
+    monkeypatch.setattr(settings, "max_upload_bytes", 1024)
+    spools, bytes_written, chunks_received = [], 0, 0
+    original_spool = formparsers.SpooledTemporaryFile
+
+    def tracked_spool(*args, **kwargs):
+        spool = original_spool(*args, **kwargs)
+        original_write = spool.write
+
+        def write(data):
+            nonlocal bytes_written
+            bytes_written += len(data)
+            return original_write(data)
+
+        spool.write = write
+        spools.append(spool)
+        return spool
+
+    monkeypatch.setattr(formparsers, "SpooledTemporaryFile", tracked_spool)
+
+    async def body():
+        nonlocal chunks_received
+        yield (
+            b'--limited\r\nContent-Disposition: form-data; name="file"; '
+            b'filename="huge.txt"\r\nContent-Type: text/plain\r\n\r\n'
+        )
+        for _ in range(32):
+            chunks_received += 1
+            yield b"a" * (16 * 1024)
+        yield b"\r\n--limited--\r\n"
+
+    async def submit():
+        headers = {
+            "Authorization": f"Bearer {settings.dev_auth_token}",
+            "Content-Type": "multipart/form-data; boundary=limited",
+        }
+        if declared_length is not None:
+            headers["Content-Length"] = declared_length
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app), base_url="http://testserver"
+        ) as client:
+            return await client.post(url, headers=headers, content=body())
+
+    response = asyncio.run(submit())
+    assert response.status_code == 413, response.text
+    assert bytes_written <= 1024 + 64 * 1024
+    assert chunks_received < 32
+    assert all(spool.closed for spool in spools)
+    if declared_length == "1000000":
+        assert chunks_received == 0
+        assert spools == []
+    assert_empty(upload_env)
+
+
 def test_duplicate_is_conflict_without_new_object_or_job(upload_env):
     client, url, _, root, deliveries, _ = upload_env
     files = {"file": ("private.txt", b"same bytes", "text/plain")}
@@ -228,3 +289,87 @@ def test_api_dispatch_does_not_require_worker_package(monkeypatch):
             },
         )
     ]
+
+
+@pytest.mark.parametrize("failure", ["execute", "commit", "rollback"])
+def test_dispatch_compensation_recovers_database_cleanup_failure(upload_env, monkeypatch, failure):
+    client, url, _, root, _, _ = upload_env
+    sentinel = root / "keep.txt"
+    sentinel.write_bytes(b"keep")
+    original_execute = Session.execute
+    original_commit = SessionTransaction.commit
+    original_rollback = SessionTransaction.rollback
+    failed = False
+
+    def execute(self, statement, *args, **kwargs):
+        nonlocal failed
+        if failure in {"execute", "rollback"} and not failed and statement.is_delete:
+            failed = True
+            raise SQLAlchemyError("sensitive cleanup detail")
+        return original_execute(self, statement, *args, **kwargs)
+
+    def commit(self, _to_root=False):
+        nonlocal failed
+        if failure == "commit" and not failed and self.parent is None:
+            failed = True
+            raise SQLAlchemyError("sensitive cleanup detail")
+        return original_commit(self, _to_root=_to_root)
+
+    def rollback(self, _capture_exception=False, _to_root=False):
+        result = original_rollback(self, _capture_exception, _to_root)
+        if failure == "rollback":
+            raise SQLAlchemyError("sensitive rollback detail")
+        return result
+
+    def dispatch(*args):
+        monkeypatch.setattr(Session, "execute", execute)
+        monkeypatch.setattr(SessionTransaction, "commit", commit)
+        monkeypatch.setattr(SessionTransaction, "rollback", rollback)
+        raise RuntimeError("sensitive dispatch detail")
+
+    monkeypatch.setattr(documents, "dispatch_parse", dispatch)
+    response = client.post(url, files={"file": ("private.txt", b"private bytes", "text/plain")})
+    assert response.status_code == 503
+    assert "sensitive" not in response.text
+    assert failed
+    assert sentinel.read_bytes() == b"keep"
+    assert [path for path in root.rglob("*") if path.is_file()] == [sentinel]
+    sentinel.unlink()
+    monkeypatch.undo()
+    assert_empty(upload_env)
+
+
+def test_dispatch_compensation_always_removes_object_during_database_outage(
+    upload_env, monkeypatch
+):
+    client, url, project_id, root, _, _ = upload_env
+    sentinel = root / "keep.txt"
+    sentinel.write_bytes(b"keep")
+    original_execute = Session.execute
+    cleanup_attempts = 0
+
+    def execute(self, statement, *args, **kwargs):
+        nonlocal cleanup_attempts
+        if statement.is_delete:
+            cleanup_attempts += 1
+            raise SQLAlchemyError("sensitive persistent cleanup detail")
+        return original_execute(self, statement, *args, **kwargs)
+
+    def dispatch(*args):
+        monkeypatch.setattr(Session, "execute", execute)
+        raise RuntimeError("sensitive dispatch detail")
+
+    monkeypatch.setattr(documents, "dispatch_parse", dispatch)
+    response = client.post(url, files={"file": ("private.txt", b"private bytes", "text/plain")})
+    assert response.status_code == 503
+    assert "sensitive" not in response.text
+    assert cleanup_attempts == 3
+    assert sentinel.read_bytes() == b"keep"
+    assert [path for path in root.rglob("*") if path.is_file()] == [sentinel]
+    monkeypatch.undo()
+    # An unavailable database cannot accept deletes. The existing queued-job
+    # watchdog can expire this job after connectivity returns.
+    with SessionLocal() as db:
+        assert len(db.scalars(select(Document).where(Document.project_id == project_id)).all()) == 1
+        jobs = db.scalars(select(GenerationJob).where(GenerationJob.project_id == project_id)).all()
+        assert len(jobs) == 1 and jobs[0].status == "queued"
