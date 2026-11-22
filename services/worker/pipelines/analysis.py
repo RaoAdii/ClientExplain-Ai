@@ -32,6 +32,21 @@ def _embed(provider, texts):
     return batch
 
 
+def _query_embedding(provider, text):
+    # The analysis prompt allows 20k characters while each embedding input allows
+    # 12k. Preserve every nonblank segment and pool by length for cosine search;
+    # the analysis provider still receives the complete, original request.
+    parts = [text[start : start + 12000] for start in range(0, len(text), 12000)]
+    parts = [part for part in parts if part.strip()]
+    vectors = _embed(provider, parts).vectors
+    total = sum(map(len, parts))
+    vector = [
+        sum(values[index] * len(part) / total for part, values in zip(parts, vectors, strict=True))
+        for index in range(1536)
+    ]
+    return validate_query_vector(vector)
+
+
 def run_analysis_job(job_id, providers) -> None:
     with _transaction() as db:
         work = _checkpoint(db, job_id, providers)
@@ -85,7 +100,7 @@ def run_analysis_job(job_id, providers) -> None:
     with _transaction() as db:
         if _checkpoint(db, job_id, providers, signature) is None:
             return
-    query_vector = _embed(providers.embedding, [request.process_text]).vectors[0]
+    query_vector = _query_embedding(providers.embedding, request.process_text)
     filters = RetrievalFilters(
         selected_document_ids=request.selected_document_ids,
         jurisdiction=request.jurisdiction,
@@ -96,14 +111,18 @@ def run_analysis_job(job_id, providers) -> None:
         if work is None:
             return
         job, project, *_ = work
-        evidence = retrieve_evidence(
-            db,
-            principal,
-            project.id,
-            query_vector,
-            filters,
-            settings.retrieval_limit,
-            settings.retrieval_threshold,
+        evidence = (
+            retrieve_evidence(
+                db,
+                principal,
+                project.id,
+                query_vector,
+                filters,
+                settings.retrieval_limit,
+                settings.retrieval_threshold,
+            )
+            if request.selected_document_ids
+            else []
         )
         if job.progress < 50:
             transition_job(db, job.id, "running", "running", stage="analyzing", progress=50)
@@ -124,14 +143,18 @@ def run_analysis_job(job_id, providers) -> None:
             return
         job, project, *_ = work
         lock_evidence(db, principal.firm_id, evidence)
-        current = retrieve_evidence(
-            db,
-            principal,
-            project.id,
-            query_vector,
-            filters,
-            settings.retrieval_limit,
-            settings.retrieval_threshold,
+        current = (
+            retrieve_evidence(
+                db,
+                principal,
+                project.id,
+                query_vector,
+                filters,
+                settings.retrieval_limit,
+                settings.retrieval_threshold,
+            )
+            if request.selected_document_ids
+            else []
         )
         current_by_id = {chunk.chunk_id: chunk for chunk in current}
         if any(current_by_id.get(chunk.chunk_id) != chunk for chunk in evidence):

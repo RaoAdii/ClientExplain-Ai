@@ -25,6 +25,7 @@ from test_analysis_provider import backed_process, process, response_body, sdk_c
 from test_rag import OWNER, VECTOR, document, source
 from worker.celery_app import app as celery
 from worker.pipelines.analysis import run_analysis_job
+from worker.tasks import record_failure
 
 
 @pytest.fixture
@@ -45,11 +46,11 @@ def project_id():
         db.execute(delete(Project).where(Project.id == project_id))
 
 
-def job_for(project_id, selected=(), *, claim=True):
+def job_for(project_id, selected=(), *, claim=True, process_text="Explain filing"):
     with SessionLocal.begin() as db:
         job = create_job(db, OWNER, project_id, "analysis", "a" * 64, None)
         request = AnalysisRequest(
-            process_text="Explain filing",
+            process_text=process_text,
             jurisdiction="India",
             selected_document_ids=list(selected),
         )
@@ -63,7 +64,7 @@ def job_for(project_id, selected=(), *, claim=True):
         return job.id
 
 
-def providers(*, callback=None, invalid=False, responses=None):
+def providers(*, callback=None, invalid=False, responses=None, embedding_vectors=None):
     calls = []
 
     def handler(request):
@@ -78,7 +79,11 @@ def providers(*, callback=None, invalid=False, responses=None):
                     "object": "list",
                     "model": "text-embedding-3-small",
                     "data": [
-                        {"object": "embedding", "index": i, "embedding": VECTOR}
+                        {
+                            "object": "embedding",
+                            "index": i,
+                            "embedding": embedding_vectors[i] if embedding_vectors else VECTOR,
+                        }
                         for i, _ in enumerate(body["input"])
                     ],
                     "usage": {"prompt_tokens": 1, "total_tokens": 1},
@@ -144,6 +149,7 @@ def test_selected_chunks_embed_on_demand_and_publish_atomically_once(project_id)
 def test_no_selected_documents_produces_unverified_general_results(project_id):
     with SessionLocal.begin() as db:
         document(db, project_id, vector=None)
+        source(db, project_id=project_id)
     job_id = job_for(project_id)
     provider, calls = providers()
     run_analysis_job(job_id, provider)
@@ -161,6 +167,55 @@ def test_no_selected_documents_produces_unverified_general_results(project_id):
     assert all(
         body["input"] == ["Explain filing"] for path, body in calls if path.endswith("embeddings")
     )
+
+
+@pytest.mark.parametrize("length", [12000, 12001, 20000])
+def test_analysis_accepts_long_requests_with_bounded_query_embeddings(project_id, length):
+    text = "a" * 12000 + "b" * (length - 12000)
+    job_id = job_for(project_id, process_text=text)
+    provider, calls = providers()
+    run_analysis_job(job_id, provider)
+    with SessionLocal() as db:
+        assert db.get(GenerationJob, job_id).status == "completed"
+        assert db.get(Project, project_id).processing_status == "completed"
+    inputs = [body["input"] for path, body in calls if path.endswith("embeddings")]
+    assert len(inputs) == 1
+    assert "".join(inputs[0]) == text
+    assert all(1 <= len(part) <= 12000 for part in inputs[0])
+    packets = [
+        json.loads(body["input"][1]["content"])
+        for path, body in calls
+        if path.endswith("responses")
+    ]
+    assert packets[0]["request"]["process_text"] == text
+
+
+def test_query_embedding_uses_both_parts_of_a_long_request_for_retrieval(project_id):
+    tail_vector = [0.0, 1.0] + [0.0] * 1534
+    with SessionLocal.begin() as db:
+        first, _ = document(db, project_id)
+        last, _ = document(db, project_id, vector=tail_vector)
+        selected = [first.id, last.id]
+    job_id = job_for(project_id, selected, process_text="a" * 12000 + "b" * 8000)
+    provider, calls = providers(embedding_vectors=[VECTOR, tail_vector])
+    run_analysis_job(job_id, provider)
+    packet = next(
+        json.loads(body["input"][1]["content"])
+        for path, body in calls
+        if path.endswith("responses")
+    )
+    assert {chunk["document_id"] for chunk in packet["evidence"]} == {
+        str(document_id) for document_id in selected
+    }
+
+
+@pytest.mark.parametrize("text", [" " * 12000 + "query", "query" + " " * 12000])
+def test_long_query_ignores_whitespace_only_embedding_segments(project_id, text):
+    job_id = job_for(project_id, process_text=text)
+    provider, _ = providers()
+    run_analysis_job(job_id, provider)
+    with SessionLocal() as db:
+        assert db.get(GenerationJob, job_id).status == "completed"
 
 
 @pytest.mark.parametrize(
@@ -313,7 +368,36 @@ def test_registered_task_runs_provider_chain_and_sanitizes_disabled_provider(pro
         job = db.get(GenerationJob, job_id)
         assert job.status == "failed"
         assert job.error_code == "job_failed"
+        assert db.get(Project, project_id).processing_status == "failed"
         assert db.scalar(select(func.count()).where(ProjectVersion.project_id == project_id)) == 0
+
+
+@pytest.mark.parametrize("new_status", ["running", "completed"])
+def test_old_terminal_failure_does_not_overwrite_newer_analysis_status(project_id, new_status):
+    old_job_id = job_for(project_id)
+    record_failure(old_job_id, "analysis", None, "job_failed", 0)
+    new_job_id = job_for(project_id)
+    with SessionLocal.begin() as db:
+        if new_status == "completed":
+            transition_job(db, new_job_id, "running", "completed", stage="completed", progress=100)
+        db.get(Project, project_id).processing_status = new_status
+    record_failure(old_job_id, "analysis", None, "job_failed", 0)
+    with SessionLocal() as db:
+        assert db.get(Project, project_id).processing_status == new_status
+
+
+def test_watchdog_marks_abandoned_analysis_project_failed(project_id):
+    from test_jobs import age_job, run_watchdog_for
+
+    celery.loader.import_default_modules()
+    job_id = job_for(project_id)
+    with SessionLocal.begin() as db:
+        db.get(Project, project_id).processing_status = "running"
+    age_job(job_id)
+    run_watchdog_for(project_id)
+    with SessionLocal() as db:
+        assert db.get(GenerationJob, job_id).status == "failed"
+        assert db.get(Project, project_id).processing_status == "failed"
 
 
 def test_existing_embeddings_are_reused_and_verified_source_citations_are_persisted(project_id):
@@ -339,8 +423,9 @@ def test_existing_embeddings_are_reused_and_verified_source_citations_are_persis
 @pytest.mark.parametrize(
     "status,attempts,retries", [(429, 4, 3), (503, 4, 3), (401, 1, 0), (400, 1, 0)]
 )
+@pytest.mark.parametrize("failure_stage", ["embeddings", "responses"])
 def test_registered_task_retries_only_typed_transient_provider_failures(
-    project_id, monkeypatch, status, attempts, retries
+    project_id, monkeypatch, status, attempts, retries, failure_stage
 ):
     import worker.tasks.analysis as task_module
 
@@ -349,6 +434,16 @@ def test_registered_task_retries_only_typed_transient_provider_failures(
     calls = []
 
     def handler(request):
+        if not request.url.path.endswith(failure_stage):
+            return httpx.Response(
+                200,
+                json={
+                    "object": "list",
+                    "model": "text-embedding-3-small",
+                    "data": [{"object": "embedding", "index": 0, "embedding": VECTOR}],
+                    "usage": {"prompt_tokens": 1, "total_tokens": 1},
+                },
+            )
         calls.append(request)
         return httpx.Response(
             status,
@@ -373,6 +468,7 @@ def test_registered_task_retries_only_typed_transient_provider_failures(
     with SessionLocal() as db:
         job = db.get(GenerationJob, job_id)
         assert (job.status, job.retry_count, job.error_code) == ("failed", retries, "job_failed")
+        assert db.get(Project, project_id).processing_status == "failed"
         assert "private provider marker" not in job.error_message
         assert db.scalar(select(func.count()).where(ProjectVersion.project_id == project_id)) == 0
     assert len(calls) == attempts

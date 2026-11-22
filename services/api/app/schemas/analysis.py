@@ -23,6 +23,9 @@ ChunkID = Annotated[
     str, StringConstraints(min_length=1, max_length=128, pattern=r"^[a-zA-Z0-9_-]+$")
 ]
 EvidenceText = Annotated[str, StringConstraints(min_length=1, max_length=12000, pattern=r"\S")]
+SourceFilename = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)
+]
 Jurisdiction = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)
 ]
@@ -61,7 +64,7 @@ class EvidenceChunk(AnalysisModel):
     verification_status: Literal["verified", "unverified"] = "unverified"
     document_id: UUID | None = None
     source_id: UUID | None = None
-    source_filename: ShortText | None = None
+    source_filename: SourceFilename | None = None
     page_number: int | None = Field(default=None, ge=1)
     heading: ShortText | None = None
 

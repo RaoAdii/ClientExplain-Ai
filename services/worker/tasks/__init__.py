@@ -5,7 +5,7 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 import httpx
 from app.core.config import settings
 from app.integrations.openai_provider import ProviderError, ProviderTimeout
-from app.models.entities import Document, GenerationJob, JobRecovery
+from app.models.entities import Document, GenerationJob, JobRecovery, Project
 from app.schemas.jobs import JobType
 from app.services.jobs import SAFE_ERRORS, transition_job
 from celery.exceptions import SoftTimeLimitExceeded
@@ -284,6 +284,32 @@ def _persist_failure(db, job, error_code, retries, *, watchdog=False):
         .values(**values)
         .execution_options(synchronize_session=False)
     )
+    if job.kind == "analysis":
+        # Terminal persistence and watchdog recovery must finish the project's
+        # visible status atomically. An old failure delivery cannot clobber a
+        # newer submission, including one that has already completed.
+        newer_analysis = (
+            select(GenerationJob.id)
+            .where(
+                GenerationJob.project_id == job.project_id,
+                GenerationJob.firm_id == job.firm_id,
+                GenerationJob.kind == "analysis",
+                GenerationJob.id != job.id,
+                (GenerationJob.created_at > job.created_at)
+                | GenerationJob.status.in_(("queued", "running")),
+            )
+            .exists()
+        )
+        db.execute(
+            update(Project)
+            .where(
+                Project.id == job.project_id,
+                Project.firm_id == job.firm_id,
+                ~newer_analysis,
+            )
+            .values(processing_status="failed")
+            .execution_options(synchronize_session=False)
+        )
     # Only consume the versions we used. A new intent or a higher retry count
     # committed after our read must survive for the next reconciliation pass.
     db.execute(

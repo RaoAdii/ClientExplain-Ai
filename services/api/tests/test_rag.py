@@ -159,6 +159,22 @@ def test_retrieval_filters_before_global_threshold_order_and_limit(corpus):
         assert [r.chunk_id for r in result] == [str(best.id), str(worse.id)]
 
 
+@pytest.mark.parametrize("length", [201, 255])
+def test_retrieval_preserves_valid_long_document_filenames(corpus, length):
+    own, _, _ = corpus
+    filename = "a" * (length - 4) + ".txt"
+    with SessionLocal.begin() as db:
+        item, chunk = document(db, own)
+        item.filename = filename
+        chunk.source_filename = filename
+        db.flush()
+        result = retrieve_evidence(
+            db, OWNER, own, VECTOR, RetrievalFilters(selected_document_ids=[item.id]), 5, 0.1
+        )
+        assert len(result) == 1
+        assert result[0].source_filename == filename
+
+
 def test_retrieval_excludes_deleted_failed_ocr_and_linked_unselected_documents(corpus):
     own, _, _ = corpus
     with SessionLocal.begin() as db:
