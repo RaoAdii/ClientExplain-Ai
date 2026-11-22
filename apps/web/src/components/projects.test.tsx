@@ -5,6 +5,7 @@ import { useSyncExternalStore, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Projects, ProjectDetail, NewProject } from "./projects";
 import { ProjectForm } from "./project-form";
+import { ProjectFilters } from "./project-filters";
 import { projectSchema } from "@/lib/validation";
 import { useUI } from "@/stores/ui";
 
@@ -130,6 +131,35 @@ describe("Project library", () => {
     act(() => { window.history.pushState({}, "", "/dashboard/projects?search=Returned&review_status=approved"); window.dispatchEvent(new PopStateEvent("popstate")); });
     expect(screen.getByRole("searchbox")).toHaveValue("Returned");
     expect(screen.getByLabelText("Review status filter")).toHaveValue("approved");
+  });
+  it("keeps the search input focused and preserves its draft after debounce commits", async () => {
+    mount(<Projects />);
+    await screen.findByText("Civil claim");
+    const input = screen.getByRole("searchbox");
+    await userEvent.type(input, " Civil ");
+    await waitFor(() => expect(new URLSearchParams(window.location.search).get("search")).toBe("Civil"));
+    expect(screen.getByRole("searchbox")).toBe(input);
+    expect(input).toHaveFocus();
+    expect(input).toHaveValue(" Civil ");
+    await userEvent.type(input, "claims ");
+    await waitFor(() => expect(new URLSearchParams(window.location.search).get("search")).toBe("Civil claims"));
+    expect(input).toHaveFocus();
+    expect(input).toHaveValue(" Civil claims ");
+  });
+  it("preserves newer typing when a submitted search arrives and synchronizes external search changes", async () => {
+    const onChange = vi.fn();
+    const { rerender } = render(<ProjectFilters search="" status="" reviewStatus="" onChange={onChange} />);
+    const input = screen.getByRole("searchbox");
+    await userEvent.type(input, "Civil");
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith({ search: "Civil" }));
+    fireEvent.change(input, { target: { value: "Civil claims " } });
+    rerender(<ProjectFilters search="Civil" status="" reviewStatus="" onChange={onChange} />);
+    expect(input).toHaveFocus();
+    expect(input).toHaveValue("Civil claims ");
+    rerender(<ProjectFilters search="Returned" status="" reviewStatus="" onChange={onChange} />);
+    expect(screen.getByRole("searchbox")).toBe(input);
+    expect(input).toHaveFocus();
+    expect(input).toHaveValue("Returned");
   });
   it("shows pending, empty, filtered empty and retryable error states without invented data", async () => {
     vi.mocked(fetch).mockImplementationOnce(() => new Promise(() => {}));

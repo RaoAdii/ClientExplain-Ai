@@ -9,17 +9,28 @@ export function ProjectFilters({ search, status, reviewStatus, onChange }: {
   reviewStatus: string;
   onChange: (changes: Record<string, string>) => void;
 }) {
-  const [draft, setDraft] = useState(search);
+  const [searchState, setSearchState] = useState({ source: search, draft: search, pending: [] as string[] });
+  const { draft } = searchState;
+  if (searchState.source !== search) {
+    const submitted = searchState.pending.indexOf(search);
+    // A local URL acknowledgment must not replace text entered since submission.
+    setSearchState({ source: search, draft: submitted < 0 ? search : draft,
+      pending: submitted < 0 ? [] : searchState.pending.slice(submitted + 1) });
+  }
   useEffect(() => {
     if (draft.trim() === search) return;
-    const timer = setTimeout(() => onChange({ search: draft.trim() }), 300);
+    const timer = setTimeout(() => {
+      const next = draft.trim();
+      setSearchState((current) => ({ ...current, pending: [...current.pending, next] }));
+      onChange({ search: next });
+    }, 300);
     return () => clearTimeout(timer);
   }, [draft, search, onChange]);
   return (
     <div className="project-filters" role="search" aria-label="Filter projects">
       <div className="field">
         <label htmlFor="project-search">Search projects</label>
-        <input id="project-search" type="search" maxLength={200} placeholder="Search project context…" value={draft} onChange={(event) => setDraft(event.target.value)} />
+        <input id="project-search" type="search" maxLength={200} placeholder="Search project context…" value={draft} onChange={(event) => setSearchState((current) => ({ ...current, draft: event.target.value }))} />
       </div>
       <div className="field">
         <label htmlFor="project-status">Workflow status filter</label>
@@ -35,7 +46,7 @@ export function ProjectFilters({ search, status, reviewStatus, onChange }: {
           {Object.entries(reviewLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </select>
       </div>
-      {(draft || status || reviewStatus) && <Button variant="ghost" onClick={() => { setDraft(""); onChange({ search: "", status: "", review_status: "" }); }}>Clear filters</Button>}
+      {(draft || status || reviewStatus) && <Button variant="ghost" onClick={() => { setSearchState((current) => ({ ...current, draft: "", pending: [...current.pending, ""] })); onChange({ search: "", status: "", review_status: "" }); }}>Clear filters</Button>}
     </div>
   );
 }

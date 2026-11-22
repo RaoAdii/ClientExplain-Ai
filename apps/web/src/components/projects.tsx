@@ -66,7 +66,7 @@ function ProjectLibrary({ overview }: { overview: boolean }) {
         action={canEdit && <Button asChild><Link href="/dashboard/projects/new"><Plus size={17} /> New project</Link></Button>}>
         {overview ? "Bring the context for your next client explanation into one place." : "Organize and find the legal processes you want to explain."}
       </PageHeader>
-      <ProjectFilters key={search} search={search} status={status} reviewStatus={reviewStatus} onChange={changeFilters} />
+      <ProjectFilters search={search} status={status} reviewStatus={reviewStatus} onChange={changeFilters} />
       <div className="section-title"><h2>{overview ? "Your projects" : "Project library"}</h2>
         {query.isSuccess && <span className="muted">{query.data.total} {query.data.total === 1 ? "project" : "projects"}</span>}
       </div>
