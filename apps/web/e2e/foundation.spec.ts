@@ -1,5 +1,33 @@
 import { test, expect } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
+import { execFileSync } from "node:child_process";
+import { resolve } from "node:path";
+
+function generatedDocx() {
+  const root = resolve(process.cwd(), "../..");
+  const python = resolve(root, process.platform === "win32" ? ".venv/Scripts/python.exe" : ".venv/bin/python");
+  return execFileSync(python, ["-c", `
+from io import BytesIO
+from zipfile import ZipFile
+import sys
+b = BytesIO()
+with ZipFile(b, 'w') as z:
+ z.writestr('[Content_Types].xml', '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+ z.writestr('_rels/.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>')
+ z.writestr('word/document.xml', '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Generated non confidential process briefing. Review the filing documents.</w:t></w:r></w:p></w:body></w:document>')
+sys.stdout.buffer.write(b.getvalue())
+`]);
+}
+function generatedPdf() {
+  const stream = "BT /F1 12 Tf 72 720 Td (Generated non confidential filing briefing.) Tj ET";
+  const objects = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>", "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>", `<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream`];
+  let pdf = "%PDF-1.4\n";
+  const offsets = [0];
+  objects.forEach((object, index) => { offsets.push(Buffer.byteLength(pdf)); pdf += `${index + 1} 0 obj\n${object}\nendobj\n`; });
+  const xref = Buffer.byteLength(pdf);
+  pdf += `xref\n0 6\n0000000000 65535 f \n${offsets.slice(1).map((offset) => `${String(offset).padStart(10, "0")} 00000 n \n`).join("")}trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
+  return Buffer.from(pdf);
+}
 
 test("public pages, navigation, metadata and responsive layout", async ({
   page,
@@ -69,7 +97,7 @@ test("public pages, navigation, metadata and responsive layout", async ({
   );
 });
 
-test("real project create, persist, edit, delete and sign out", async ({
+test("real project, document processing, unavailable analysis, persistence and deletion", async ({
   page,
   isMobile,
 }) => {
@@ -91,12 +119,13 @@ test("real project create, persist, edit, delete and sign out", async ({
         .analyze()
     ).violations,
   ).toEqual([]);
-  await page.getByRole("button", { name: "New project", exact: true }).click();
+  await page.getByRole("link", { name: "New project", exact: true }).click();
   await page
     .getByRole("button", { name: "Create project", exact: true })
     .click();
   await expect(page.getByText("Enter a project name.")).toBeVisible();
   const name = `Process briefing ${Date.now()}`;
+  test.setTimeout(120000);
   await page.getByLabel("Project name", { exact: true }).fill(name);
   await page
     .getByLabel("Jurisdiction", { exact: true })
@@ -104,20 +133,62 @@ test("real project create, persist, edit, delete and sign out", async ({
   await page
     .getByLabel("Project description", { exact: true })
     .fill("Prepare a non-confidential explanation of the review process.");
-  await page
-    .getByRole("button", { name: "Create project", exact: true })
-    .click();
-  await expect(page.getByRole("status")).toContainText("Project created");
-  await page
-    .getByRole("link")
-    .filter({ has: page.getByRole("heading", { name, exact: true }) })
-    .click();
+  await page.getByLabel("Legal area", { exact: true }).fill("Civil litigation");
+  await page.getByLabel("Language", { exact: true }).fill("English");
+  await page.getByLabel("Target audience", { exact: true }).fill("First-time client");
+  await page.getByLabel("Complexity", { exact: true }).fill("standard");
+  await page.getByLabel("Workflow status", { exact: true }).selectOption("active");
+  await page.getByRole("button", { name: "Create project", exact: true }).click();
+  await expect(page.getByRole("status").filter({ hasText: "Project created" })).toBeVisible();
   await expect(page).toHaveURL(/\/dashboard\/projects\/[0-9a-f-]+$/);
   await page.reload();
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(name);
   await expect(
     page.getByText("England and Wales", { exact: true }),
   ).toBeVisible();
+  await expect(page.getByText("Civil litigation", { exact: true })).toBeVisible();
+  await expect(page.getByText("First-time client", { exact: true })).toBeVisible();
+  const files = [
+    { name: "brief.txt", mimeType: "text/plain", buffer: Buffer.from("Generated non confidential TXT filing notes.") },
+    { name: "brief.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", buffer: generatedDocx() },
+    { name: "brief.pdf", mimeType: "application/pdf", buffer: generatedPdf() },
+  ];
+  for (const file of files) {
+    await page.getByLabel("Document file", { exact: true }).setInputFiles(file);
+    await page.getByRole("button", { name: "Upload document", exact: true }).click();
+    await expect(page.getByLabel(`Select ${file.name}`, { exact: true })).toBeEnabled({ timeout: 45000 });
+  }
+  await expect(page.locator("h1")).toHaveCount(1);
+  await page.getByRole("link", { name: "Analysis", exact: true }).focus();
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(/#analysis$/);
+  await page.getByLabel("Process text", { exact: true }).fill("Explain the filing and review process for a civil claim.");
+  await page.getByLabel("Select brief.txt", { exact: true }).check();
+  await expect(page.getByRole("button", { name: "Analyze process", exact: true })).toBeDisabled();
+  await page.getByLabel("I authorize external processing of the selected documents.", { exact: true }).check();
+  const providerResponse = page.waitForResponse((response) => response.url().endsWith("/analyze") && response.request().method() === "POST");
+  await page.getByRole("button", { name: "Analyze process", exact: true }).click();
+  expect((await providerResponse).status()).toBe(503);
+  await expect(page.getByRole("alert").filter({ hasText: /provider|processing|configured|disabled/i })).toBeVisible();
+  await expect(page.getByLabel("Process text", { exact: true })).toHaveValue("Explain the filing and review process for a civil claim.");
+  // The browser reports this deliberately exercised HTTP 503; all other console errors fail.
+  const expectedProviderError = errors.findIndex((error) => /503/.test(error));
+  if (expectedProviderError >= 0) errors.splice(expectedProviderError, 1);
+  for (const width of [320, 375, 768, 1024, 1440]) {
+    await page.setViewportSize({ width, height: 900 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), `Project overflow at ${width}px`).toBe(true);
+  }
+  expect((await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze()).violations).toEqual([]);
+  const projectUrl = page.url().split("#")[0];
+  await page.goto("/dashboard/projects");
+  await page.getByRole("link").filter({ has: page.getByRole("heading", { name, exact: true }) }).click();
+  await expect(page).toHaveURL(projectUrl);
+  for (const file of files) await expect(page.getByLabel(`Select ${file.name}`, { exact: true })).toBeEnabled();
+  await page.getByRole("button", { name: "Delete brief.txt", exact: true }).click();
+  await page.getByRole("button", { name: "Keep document", exact: true }).click();
+  await page.getByRole("button", { name: "Delete brief.txt", exact: true }).click();
+  await page.getByRole("button", { name: "Confirm document deletion", exact: true }).click();
+  await expect(page.getByLabel("Select brief.txt", { exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "Edit details" }).click();
   await page
     .getByLabel("Project name", { exact: true })

@@ -1,4 +1,4 @@
-import { ProjectDetail } from "@/components/projects";
+import { ProjectWorkspace } from "@/components/project-workspace";
 import { pageMetadata } from "@/lib/metadata";
 import { notFound } from "next/navigation";
 export async function generateMetadata({
@@ -21,5 +21,5 @@ export default async function Page({
 }) {
   const { id } = await params;
   if (!/^[0-9a-f-]{36}$/i.test(id)) notFound();
-  return <ProjectDetail id={id} />;
+  return <ProjectWorkspace id={id} />;
 }
