@@ -9,7 +9,7 @@ import httpx
 import pytest
 from app.core.auth import DEV_FIRM, DEV_USER, Principal, get_principal
 from app.core.config import MAX_UPLOAD_BYTES, settings
-from app.db.session import SessionLocal
+from app.db.session import SessionLocal, redis_client
 from app.integrations.storage import LocalPrivateStorage
 from app.main import app
 from app.models.entities import Document, GenerationJob, Project
@@ -36,6 +36,8 @@ def docx():
 
 @pytest.fixture
 def upload_env(tmp_path, monkeypatch):
+    rate_key = f"clientexplain:rate:upload:{DEV_FIRM}:{DEV_USER}"
+    redis_client.delete(rate_key)
     project_id = uuid4()
     with SessionLocal.begin() as db:
         db.add(Project(id=project_id, firm_id=DEV_FIRM, created_by=DEV_USER, name="Upload"))
@@ -61,6 +63,7 @@ def upload_env(tmp_path, monkeypatch):
             storage,
         )
     app.dependency_overrides.clear()
+    redis_client.delete(rate_key)
     with SessionLocal.begin() as db:
         db.execute(delete(Project).where(Project.id == project_id))
 

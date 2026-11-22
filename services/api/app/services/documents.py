@@ -1,6 +1,7 @@
 import codecs
 import hashlib
 import logging
+from datetime import UTC, datetime
 from pathlib import PurePosixPath
 from tempfile import TemporaryFile
 from uuid import UUID, uuid4
@@ -11,10 +12,19 @@ from app.core.config import settings
 from app.core.permissions import PROJECT_EDITORS, check_roles
 from app.db.session import SessionLocal
 from app.integrations.storage import get_storage
-from app.models.entities import Document, GenerationJob, Project
+from app.models.entities import (
+    Document,
+    DocumentChunk,
+    GenerationJob,
+    ProcessStage,
+    Project,
+    ProjectVersion,
+)
 from app.repositories.documents import find_duplicate, insert_document
 from app.schemas.documents import UploadRead
-from app.services.jobs import create_job
+from app.schemas.workflow import DocumentDetail
+from app.services.activity import audit
+from app.services.jobs import create_job, transition_job
 from app.services.projects import require_project
 from celery import Celery
 from fastapi import HTTPException, UploadFile
@@ -183,6 +193,7 @@ def upload_document(principal: Principal, project_id: UUID, upload: UploadFile) 
                 db, principal, project_id, "parse", digest, None, document_id=document_id
             )
             job_id = job.id
+            audit(db, principal, "document.uploaded", project_id)
             result = UploadRead(document=document, job=job)
         committed = True
         dispatch_parse(document_id, job_id)
@@ -208,3 +219,126 @@ def upload_document(principal: Principal, project_id: UUID, upload: UploadFile) 
         if isinstance(exc, HTTPException):
             raise
         raise HTTPException(503, "The upload could not be completed. Try again shortly.") from None
+
+
+def list_documents(db, principal, project_id):
+    require_project(db, principal, project_id)
+    return db.scalars(
+        select(Document)
+        .where(
+            Document.firm_id == principal.firm_id,
+            Document.project_id == project_id,
+            Document.deleted_at.is_(None),
+        )
+        .order_by(Document.created_at, Document.id)
+    ).all()
+
+
+def require_document(db, principal, document_id, *, include_deleted=False):
+    query = select(Document).where(
+        Document.id == document_id, Document.firm_id == principal.firm_id
+    )
+    if not include_deleted:
+        query = query.where(Document.deleted_at.is_(None))
+    document = db.scalar(query)
+    if document is None:
+        raise HTTPException(404, "Document not found.")
+    return document
+
+
+def document_detail(db, principal, document_id, *, download=False):
+    document = require_document(db, principal, document_id)
+    result = DocumentDetail.model_validate(document)
+    if download:
+        try:
+            result.download_url = get_storage().signed_url(document.storage_key, 300)
+            result.download_url_expires_in = 300
+        except NotImplementedError:
+            # Local storage never exposes filesystem paths or a public file URL.
+            pass
+        except Exception:
+            raise HTTPException(
+                503, "Document storage is unavailable. Try again shortly."
+            ) from None
+    return result
+
+
+def delete_document(principal, document_id):
+    # Hide and invalidate evidence before external cleanup. A tombstone makes a
+    # storage outage retriable and stops in-flight workers from publishing it.
+    with SessionLocal.begin() as db:
+        tenant_context(db, principal)
+        document = require_document(db, principal, document_id, include_deleted=True)
+        project = require_project(db, principal, document.project_id, for_update=True)
+        check_roles(principal, *PROJECT_EDITORS)
+        document = db.scalar(
+            select(Document)
+            .where(
+                Document.id == document_id,
+                Document.firm_id == principal.firm_id,
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        if document is None:
+            raise HTTPException(404, "Document not found.")
+        key = document.storage_key
+        if document.deleted_at is None:
+            document.deleted_at, document.deleted_by = datetime.now(UTC), principal.user_id
+            document.document_metadata = {"storage_cleanup_pending": True}
+            # Snapshots and explanations can contain quotations beyond citation
+            # rows. Invalidate the current publication and versions together.
+            for model in (ProjectVersion, ProcessStage):
+                db.execute(
+                    delete(model).where(
+                        model.project_id == project.id, model.firm_id == principal.firm_id
+                    )
+                )
+            db.execute(
+                delete(DocumentChunk).where(
+                    DocumentChunk.document_id == document_id,
+                    DocumentChunk.firm_id == principal.firm_id,
+                )
+            )
+            active = db.scalars(
+                select(GenerationJob)
+                .where(
+                    GenerationJob.project_id == project.id,
+                    GenerationJob.firm_id == principal.firm_id,
+                    GenerationJob.status.in_(("queued", "running")),
+                )
+                .order_by(GenerationJob.id)
+                .with_for_update()
+            ).all()
+            for job in active:
+                metadata = job.request_metadata
+                if metadata.get("document_id") == str(document_id) or str(
+                    document_id
+                ) in metadata.get("analysis_request", {}).get("selected_document_ids", []):
+                    transition_job(
+                        db,
+                        job.id,
+                        job.status,
+                        "cancelled",
+                        stage="cancelled",
+                        progress=job.progress,
+                    )
+                    if job.kind == "analysis":
+                        project.processing_status = "cancelled"
+            project.review_status = "requires_review"
+            audit(db, principal, "document.deleted", project.id)
+    try:
+        get_storage().delete(key)
+    except Exception:
+        raise HTTPException(
+            503, "Document storage cleanup is pending. Retry deletion shortly."
+        ) from None
+    with SessionLocal.begin() as db:
+        tenant_context(db, principal)
+        db.execute(
+            delete(Document).where(
+                Document.id == document_id,
+                Document.firm_id == principal.firm_id,
+                Document.deleted_at.is_not(None),
+            )
+        )

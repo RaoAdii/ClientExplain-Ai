@@ -13,6 +13,7 @@ from starlette.exceptions import HTTPException
 from app.api.routes import router
 from app.core.config import settings
 from app.core.upload_limits import UploadBodyLimit
+from app.integrations.openai_provider import ProviderUnavailable
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("clientexplain")
@@ -27,7 +28,14 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
     allow_methods=["GET", "POST", "PATCH", "DELETE"],
-    allow_headers=["Authorization", "Content-Type"],
+    allow_headers=["Authorization", "Content-Type", "Idempotency-Key"],
+    expose_headers=[
+        "Retry-After",
+        "X-Request-ID",
+        "X-RateLimit-Limit",
+        "X-RateLimit-Remaining",
+        "X-RateLimit-Reset",
+    ],
     allow_credentials=False,
 )
 app.add_middleware(UploadBodyLimit)
@@ -78,6 +86,20 @@ async def validation_error(request, exc):
     return JSONResponse(
         status_code=422,
         content={"error": {"message": "Check the submitted fields.", "fields": errors}},
+    )
+
+
+@app.exception_handler(ProviderUnavailable)
+async def provider_unavailable(request, exc):
+    return JSONResponse(
+        status_code=503,
+        content={
+            "error": {
+                "message": exc.message,
+                "code": exc.code,
+                "request_id": getattr(request.state, "request_id", None),
+            }
+        },
     )
 
 
