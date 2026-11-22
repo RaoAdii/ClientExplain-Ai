@@ -1,19 +1,40 @@
-import os
+from uuid import UUID
 
-from celery import Celery
+from app.core.config import settings
+from celery import Celery, Task
 
-app = Celery("clientexplain", broker=os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/0"))
+app = Celery(
+    "clientexplain",
+    broker=settings.redis_url,
+    include=["worker.tasks.documents", "worker.tasks.analysis"],
+)
 app.conf.update(
     task_serializer="json",
     accept_content=["json"],
     result_serializer="json",
     task_ignore_result=True,
+    task_acks_late=True,
+    task_reject_on_worker_lost=True,
     worker_prefetch_multiplier=1,
     task_time_limit=600,
     task_soft_time_limit=540,
     task_default_queue="generation",
     broker_connection_retry_on_startup=True,
 )
+
+
+class JobTask(Task):
+    autoretry_for = (ConnectionError, TimeoutError)
+    retry_backoff = True
+    retry_backoff_max = 60
+    retry_jitter = True
+    max_retries = 3
+
+
+def task_id(value: str) -> UUID:
+    if not isinstance(value, str):
+        raise ValueError("Task arguments must be UUID strings.")
+    return UUID(value)
 
 
 @app.task(name="worker.health")

@@ -31,6 +31,8 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://clientexplain:${POSTGRES_PASSWORD}@postgres:5432/clientexplain
       REDIS_URL: redis://redis:6379/0
+      PRIVATE_STORAGE_ROOT: /home/appuser/private-storage
+    volumes: ["private_storage:/home/appuser"]
     ports: ["127.0.0.1:8000:8000"]
     depends_on:
       postgres: {condition: service_healthy}
@@ -45,11 +47,17 @@ services:
     build:
       context: .
       dockerfile: infrastructure/docker/worker.Dockerfile
+    env_file: .env
     environment:
+      DATABASE_URL: postgresql+psycopg://clientexplain:${POSTGRES_PASSWORD}@postgres:5432/clientexplain
       REDIS_URL: redis://redis:6379/0
+      PRIVATE_STORAGE_ROOT: /home/worker/private-storage
+    volumes: ["private_storage:/home/worker"]
     depends_on:
+      postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
     profiles: [app]
 volumes:
   postgres_data:
   redis_data:
+  private_storage:
