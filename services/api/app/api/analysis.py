@@ -3,14 +3,25 @@ from uuid import UUID
 from app.core.auth import Principal, get_principal, tenant_session
 from app.schemas.analysis import AnalysisRequest
 from app.schemas.jobs import JobRead
-from app.schemas.workflow import CitationRead, ErrorRead, ProcessRead, StageRead
+from app.schemas.workflow import (
+    CitationRead,
+    ErrorRead,
+    ProcessRead,
+    StageRead,
+    ValidationErrorRead,
+)
 from app.services.jobs import get_job
 from app.services.workflow import get_stage, list_citations, list_stages, submit_analysis
 from fastapi import APIRouter, Depends, Header, Response
 from sqlalchemy.orm import Session
 
 router = APIRouter(
-    tags=["Analysis"], responses={401: {"model": ErrorRead}, 404: {"model": ErrorRead}}
+    tags=["Analysis"],
+    responses={
+        401: {"model": ErrorRead},
+        404: {"model": ErrorRead},
+        422: {"model": ValidationErrorRead},
+    },
 )
 
 

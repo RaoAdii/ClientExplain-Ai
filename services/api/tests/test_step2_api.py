@@ -430,19 +430,34 @@ def test_unknown_fields_and_invalid_submission_keys_are_rejected(workflow, monke
     client, ids, _ = workflow
     allow_ai(monkeypatch)
     url = f"/api/v1/projects/{ids['project']}/analyze"
-    assert client.post(url, json={**payload(ids), "firm_id": str(DEV_FIRM)}).status_code == 422
-    assert (
-        client.post(url, json=payload(ids), headers={"Idempotency-Key": "x" * 201}).status_code
-        == 422
+    for response, field in (
+        (client.post(url, json={**payload(ids), "firm_id": str(DEV_FIRM)}), "body.firm_id"),
+        (
+            client.post(url, json=payload(ids), headers={"Idempotency-Key": "x" * 201}),
+            "header.idempotency-key",
+        ),
+        (
+            client.get(f"/api/v1/documents/{ids['document']}", params={"download": "invalid"}),
+            "query.download",
+        ),
+    ):
+        assert response.status_code == 422, response.text
+        error = response.json()["error"]
+        assert error["message"] == "Check the submitted fields."
+        assert [item["field"] for item in error["fields"]] == [field]
+        assert all(isinstance(item["message"], str) for item in error["fields"])
+    rejected = client.post(
+        f"/api/v1/projects/{ids['project']}/documents",
+        data={"firm_id": str(DEV_FIRM)},
+        files={"file": ("new.txt", b"new content", "text/plain")},
     )
-    assert (
-        client.post(
-            f"/api/v1/projects/{ids['project']}/documents",
-            data={"firm_id": str(DEV_FIRM)},
-            files={"file": ("new.txt", b"new content", "text/plain")},
-        ).status_code
-        == 422
-    )
+    assert rejected.status_code == 422
+    assert rejected.json() == {
+        "error": {
+            "message": "Submit exactly one file and no unknown fields.",
+            "request_id": rejected.headers["X-Request-ID"],
+        }
+    }
 
 
 @pytest.mark.parametrize("operation", ["upload", "analysis"])
@@ -510,6 +525,62 @@ def test_openapi_declares_workflow_responses(workflow):
         ("/api/v1/projects/{project_id}/citations", "get", ["200", "404"]),
     ]:
         assert set(statuses) <= paths[path][method]["responses"].keys()
+
+
+@pytest.mark.parametrize(
+    "method,path,identifier",
+    [
+        ("post", "/api/v1/projects/{project_id}/documents", "project_id"),
+        ("get", "/api/v1/projects/{project_id}/documents", "project_id"),
+        ("get", "/api/v1/documents/{document_id}", "document_id"),
+        ("delete", "/api/v1/documents/{document_id}", "document_id"),
+        ("post", "/api/v1/projects/{project_id}/analyze", "project_id"),
+        ("get", "/api/v1/jobs/{job_id}", "job_id"),
+        ("get", "/api/v1/projects/{project_id}/stages", "project_id"),
+        ("get", "/api/v1/stages/{stage_id}", "stage_id"),
+        ("get", "/api/v1/projects/{project_id}/citations", "project_id"),
+    ],
+)
+def test_workflow_openapi_validation_envelope_matches_runtime(workflow, method, path, identifier):
+    client, ids, _ = workflow
+    request = {}
+    if method == "post":
+        if path.endswith("/documents"):
+            request["files"] = {"file": ("new.txt", b"data", "text/plain")}
+        else:
+            request["json"] = payload(ids)
+    response = client.request(method, path.format(**{identifier: "invalid-uuid"}), **request)
+    assert response.status_code == 422, response.text
+    assert set(response.json()) == {"error"}
+    error = response.json()["error"]
+    assert set(error) == {"message", "fields"}
+    assert error["message"] == "Check the submitted fields."
+    assert len(error["fields"]) == 1
+    assert error["fields"][0]["field"] == f"path.{identifier}"
+    assert isinstance(error["fields"][0]["message"], str)
+
+    contract = client.get("/openapi.json").json()
+    schema = contract["paths"][path][method]["responses"]["422"]["content"]["application/json"][
+        "schema"
+    ]
+    variants = schema.get("anyOf", [schema])
+    assert {"$ref": "#/components/schemas/ValidationErrorRead"} in variants
+    if method == "post" and path.endswith("/documents"):
+        assert {"$ref": "#/components/schemas/ErrorRead"} in variants
+    models = contract["components"]["schemas"]
+    envelope = models["ValidationErrorRead"]
+    assert envelope["required"] == ["error"]
+    assert envelope["properties"]["error"] == {"$ref": "#/components/schemas/ValidationErrorDetail"}
+    detail = models["ValidationErrorDetail"]
+    assert set(detail["required"]) == {"message", "fields"}
+    assert detail["properties"]["fields"]["type"] == "array"
+    assert detail["properties"]["fields"]["items"] == {
+        "$ref": "#/components/schemas/ValidationErrorField"
+    }
+    field = models["ValidationErrorField"]
+    assert set(field["required"]) == {"field", "message"}
+    assert field["properties"]["field"]["type"] == "string"
+    assert field["properties"]["message"]["type"] == "string"
 
 
 def test_every_workflow_read_requires_authentication(workflow):

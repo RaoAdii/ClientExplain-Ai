@@ -18,6 +18,20 @@ class ErrorRead(BaseModel):
     error: ErrorDetail
 
 
+class ValidationErrorField(BaseModel):
+    field: str
+    message: str
+
+
+class ValidationErrorDetail(BaseModel):
+    message: str
+    fields: list[ValidationErrorField]
+
+
+class ValidationErrorRead(BaseModel):
+    error: ValidationErrorDetail
+
+
 class DocumentDetail(DocumentRead):
     page_count: int | None
     parsing_error: str | None

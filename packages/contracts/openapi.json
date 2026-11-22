@@ -450,6 +450,24 @@
             },
             "description": "Not Found"
           },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ValidationErrorRead"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ErrorRead"
+                    }
+                  ],
+                  "title": "Response 422 Upload Api V1 Projects  Project Id  Documents Post"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
           "403": {
             "content": {
               "application/json": {
@@ -489,16 +507,6 @@
               }
             },
             "description": "Unsupported Media Type"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorRead"
-                }
-              }
-            },
-            "description": "Unprocessable Entity"
           },
           "429": {
             "content": {
@@ -581,14 +589,14 @@
             "description": "Not Found"
           },
           "422": {
-            "description": "Validation Error",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/ValidationErrorRead"
                 }
               }
-            }
+            },
+            "description": "Unprocessable Entity"
           }
         }
       }
@@ -658,6 +666,16 @@
             },
             "description": "Not Found"
           },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationErrorRead"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
           "503": {
             "content": {
               "application/json": {
@@ -667,16 +685,6 @@
               }
             },
             "description": "Service Unavailable"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
           }
         }
       },
@@ -727,6 +735,16 @@
             },
             "description": "Not Found"
           },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationErrorRead"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
           "403": {
             "content": {
               "application/json": {
@@ -746,16 +764,6 @@
               }
             },
             "description": "Service Unavailable"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
           }
         }
       }
@@ -843,6 +851,16 @@
             },
             "description": "Not Found"
           },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationErrorRead"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
           "403": {
             "content": {
               "application/json": {
@@ -882,16 +900,6 @@
               }
             },
             "description": "Service Unavailable"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
           }
         }
       }
@@ -953,14 +961,14 @@
             "description": "Not Found"
           },
           "422": {
-            "description": "Validation Error",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/ValidationErrorRead"
                 }
               }
-            }
+            },
+            "description": "Unprocessable Entity"
           }
         }
       }
@@ -1021,14 +1029,14 @@
             "description": "Not Found"
           },
           "422": {
-            "description": "Validation Error",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/ValidationErrorRead"
                 }
               }
-            }
+            },
+            "description": "Unprocessable Entity"
           }
         }
       }
@@ -1089,14 +1097,14 @@
             "description": "Not Found"
           },
           "422": {
-            "description": "Validation Error",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/ValidationErrorRead"
                 }
               }
-            }
+            },
+            "description": "Unprocessable Entity"
           }
         }
       }
@@ -1161,14 +1169,14 @@
             "description": "Not Found"
           },
           "422": {
-            "description": "Validation Error",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/ValidationErrorRead"
                 }
               }
-            }
+            },
+            "description": "Unprocessable Entity"
           }
         }
       }
@@ -2527,6 +2535,57 @@
           "type"
         ],
         "title": "ValidationError"
+      },
+      "ValidationErrorDetail": {
+        "properties": {
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationErrorField"
+            },
+            "type": "array",
+            "title": "Fields"
+          }
+        },
+        "type": "object",
+        "required": [
+          "message",
+          "fields"
+        ],
+        "title": "ValidationErrorDetail"
+      },
+      "ValidationErrorField": {
+        "properties": {
+          "field": {
+            "type": "string",
+            "title": "Field"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "field",
+          "message"
+        ],
+        "title": "ValidationErrorField"
+      },
+      "ValidationErrorRead": {
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ValidationErrorDetail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "title": "ValidationErrorRead"
       }
     },
     "securitySchemes": {
