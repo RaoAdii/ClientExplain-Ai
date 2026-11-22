@@ -1,22 +1,24 @@
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from threading import Barrier
 from uuid import uuid4
 
 import pytest
 from app.core.auth import DEV_FIRM, DEV_USER, Principal
-from app.db.session import SessionLocal, engine
+from app.db.session import SessionLocal
 from app.models.entities import Document, GenerationJob, Project
 from app.schemas.auth import Role
 from app.schemas.jobs import JobRead
 from app.services.jobs import create_job, get_job, transition_job
-from celery.exceptions import SoftTimeLimitExceeded
+from celery.exceptions import Reject, SoftTimeLimitExceeded
 from fastapi import HTTPException
-from sqlalchemy import delete, event, func, select
+from sqlalchemy import delete, event, func, select, update
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.exc import TimeoutError as PoolTimeout
+from sqlalchemy.orm import with_loader_criteria
 from worker.celery_app import app as celery
+from worker.tasks import JobSession, engine
 
 OWNER = Principal(DEV_USER, DEV_FIRM, Role.OWNER)
 DIGEST = "a" * 64
@@ -294,8 +296,8 @@ def test_parse_submission_binds_live_document_and_scopes_replay(project_id):
         (["timeout"], "timeout", 0),
         (["connect"] * 4, "database_unavailable", 3),
         (["connect"] * 7, "database_unavailable", 3),
-        (["timeout", "connect", "connect"], "timeout", 0),
-        (["timeout", "pool_timeout"], "timeout", 0),
+        (["constraint", "connect", "connect"], "job_failed", 0),
+        (["constraint", "pool_timeout"], "job_failed", 0),
     ],
 )
 def test_worker_terminal_recovery_releases_project_without_leaking_errors(
@@ -329,8 +331,242 @@ def test_worker_terminal_recovery_releases_project_without_leaking_errors(
         event.remove(engine, "before_cursor_execute", fault)
     assert PRIVATE_MARKER not in caplog.text
     assert result.successful(), result.result
+    if faults[0] == "timeout":
+        age_job(job.id)
+        run_watchdog_for(project_id)
     with SessionLocal.begin() as db:
         saved = get_job(db, OWNER, job.id)
         assert (saved.status, saved.error_code, saved.retry_count) == ("failed", expected, retries)
         assert saved.finished_at is not None and PRIVATE_MARKER not in saved.error_message
         assert create_job(db, OWNER, project_id, "analysis", DIGEST, None).id != job.id
+
+
+def age_job(job_id):
+    old = datetime.now(UTC) - timedelta(hours=2)
+    with SessionLocal.begin() as db:
+        db.execute(
+            update(GenerationJob)
+            .where(GenerationJob.id == job_id)
+            .values(
+                created_at=old,
+                updated_at=old,
+                started_at=old,
+            )
+        )
+
+
+def run_watchdog_for(project_id):
+    # Limit the integration scan to this fixture when tests use the local development DB.
+    def scope(execution):
+        if execution.is_select:
+            execution.statement = execution.statement.options(
+                with_loader_criteria(GenerationJob, GenerationJob.project_id == project_id)
+            )
+
+    event.listen(JobSession, "do_orm_execute", scope)
+    try:
+        celery.tasks["worker.reconcile_stale_jobs"].apply(throw=True)
+    finally:
+        event.remove(JobSession, "do_orm_execute", scope)
+
+
+def test_soft_deadline_avoids_io_and_timeout_survives_broker_replay(project_id, monkeypatch):
+    celery.loader.import_default_modules()
+    task = celery.tasks["worker.analyze_project"]
+    with SessionLocal.begin() as db:
+        job = create_job(db, OWNER, project_id, "analysis", DIGEST, None)
+    interrupted = False
+    recovery_io = []
+
+    def deadline(conn, cursor, statement, params, context, executemany):
+        nonlocal interrupted
+        if interrupted:
+            recovery_io.append("sql")
+            raise OperationalError(None, None, ConnectionRefusedError(PRIVATE_MARKER))
+        if (
+            statement.startswith("UPDATE generation_jobs")
+            and "finished_at" in statement.split("WHERE")[0]
+        ):
+            interrupted = True
+            raise SoftTimeLimitExceeded(PRIVATE_MARKER)
+
+    def offline(*args, **kwargs):
+        recovery_io.append("publish")
+        raise ConnectionRefusedError("broker unavailable")
+
+    monkeypatch.setattr(task, "retry_delivery", offline)
+    event.listen(engine, "before_cursor_execute", deadline)
+    try:
+        task.apply(args=[str(job.id)], throw=False)
+    finally:
+        event.remove(engine, "before_cursor_execute", deadline)
+    assert interrupted and recovery_io == []
+    # The original ID-only delivery can arrive again without terminal headers.
+    task.apply(args=[str(job.id)], throw=True)
+    with SessionLocal() as db:
+        assert get_job(db, OWNER, job.id).status == "running"
+    age_job(job.id)
+    run_watchdog_for(project_id)
+    with SessionLocal() as db:
+        assert get_job(db, OWNER, job.id).error_code == "timeout"
+
+
+def test_timeout_cause_survives_failed_recovery_publish_and_original_replay(
+    project_id, monkeypatch
+):
+    celery.loader.import_default_modules()
+    task = celery.tasks["worker.analyze_project"]
+    delivery_id = str(uuid4())
+    with SessionLocal.begin() as db:
+        job = create_job(db, OWNER, project_id, "analysis", DIGEST, None)
+    interrupted = False
+
+    def deadline(conn, cursor, statement, params, context, executemany):
+        nonlocal interrupted
+        if interrupted:
+            raise OperationalError(None, None, ConnectionRefusedError(PRIVATE_MARKER))
+        if (
+            statement.startswith("UPDATE generation_jobs")
+            and "finished_at" in statement.split("WHERE")[0]
+        ):
+            interrupted = True
+            raise SoftTimeLimitExceeded()
+
+    def broker_unavailable(*args, **kwargs):
+        raise Reject("Retry publication failed.", requeue=False)
+
+    monkeypatch.setattr(task, "retry", broker_unavailable)
+    event.listen(engine, "before_cursor_execute", deadline)
+    try:
+        task.apply(args=[str(job.id)], task_id=delivery_id, throw=False)
+    finally:
+        event.remove(engine, "before_cursor_execute", deadline)
+    assert interrupted
+    # Redis can redeliver the original message without any terminal headers.
+    task.apply(args=[str(job.id)], task_id=delivery_id, throw=True)
+    age_job(job.id)
+    run_watchdog_for(project_id)
+    with SessionLocal() as db:
+        saved = get_job(db, OWNER, job.id)
+        assert (saved.status, saved.error_code) == ("failed", "timeout")
+
+
+@pytest.mark.parametrize("kind", ["analysis", "parse"])
+@pytest.mark.parametrize("status", ["queued", "running"])
+def test_watchdog_skips_lock_then_releases_abandoned_job(project_id, kind, status):
+    celery.loader.import_default_modules()
+    with SessionLocal.begin() as db:
+        document_id = add_document(db, project_id).id if kind == "parse" else None
+        job = create_job(db, OWNER, project_id, kind, DIGEST, None, document_id=document_id)
+        if status == "running":
+            transition_job(db, job.id, "queued", "running", stage="reading", progress=10)
+    age_job(job.id)
+    with SessionLocal.begin() as locker:
+        locker.scalar(select(GenerationJob).where(GenerationJob.id == job.id).with_for_update())
+        run_watchdog_for(project_id)
+        assert get_job(locker, OWNER, job.id).status == status
+    run_watchdog_for(project_id)
+    run_watchdog_for(project_id)
+    with SessionLocal.begin() as db:
+        saved = get_job(db, OWNER, job.id)
+        assert (saved.status, saved.error_code, saved.retry_count) == ("failed", "timeout", 0)
+        assert (
+            create_job(db, OWNER, project_id, kind, DIGEST, None, document_id=document_id).id
+            != job.id
+        )
+
+
+@pytest.mark.parametrize(
+    "boundary",
+    [
+        "claim_query",
+        "claim_commit",
+        "terminal_query",
+        "terminal_commit",
+        "recovery_query",
+        "recovery_commit",
+    ],
+)
+def test_soft_timeout_discards_connection_without_rollback(project_id, monkeypatch, boundary):
+    celery.loader.import_default_modules()
+    task = celery.tasks["worker.analyze_project"]
+    with SessionLocal.begin() as db:
+        job = create_job(db, OWNER, project_id, "analysis", DIGEST, None)
+    interrupted = False
+    recovery_io = []
+    commits = 0
+    execute = engine.dialect.do_execute
+    commit = engine.dialect.do_commit
+    rollback = engine.dialect.do_rollback
+
+    def deadline_execute(cursor, statement, parameters, context=None):
+        nonlocal interrupted
+        if interrupted:
+            recovery_io.append("execute")
+        terminal = (
+            statement.startswith("UPDATE generation_jobs")
+            and "finished_at" in statement.split("WHERE")[0]
+        )
+        if (boundary == "claim_query" and statement.startswith("SELECT")) or (
+            boundary in {"terminal_query", "recovery_query"} and terminal
+        ):
+            interrupted = True
+            raise SoftTimeLimitExceeded(PRIVATE_MARKER)
+        return execute(cursor, statement, parameters, context)
+
+    def deadline_commit(connection):
+        nonlocal interrupted, commits
+        commits += 1
+        if boundary in {"claim_commit", "recovery_commit"} or (
+            boundary == "terminal_commit" and commits == 2
+        ):
+            interrupted = True
+            raise SoftTimeLimitExceeded(PRIVATE_MARKER)
+        return commit(connection)
+
+    def observe_rollback(connection):
+        if interrupted:
+            recovery_io.append("rollback")
+        return rollback(connection)
+
+    with monkeypatch.context() as patches:
+        patches.setattr(engine.dialect, "do_execute", deadline_execute)
+        patches.setattr(engine.dialect, "do_commit", deadline_commit)
+        patches.setattr(engine.dialect, "do_rollback", observe_rollback)
+        headers = (
+            {"job_terminal_code": "timeout", "job_processing_retries": 0}
+            if boundary.startswith("recovery")
+            else None
+        )
+        result = task.apply(args=[str(job.id)], headers=headers, throw=False)
+    assert result.successful(), result.result
+    assert interrupted and recovery_io == []
+    # Once the real soft deadline has elapsed, even an unclaimed delivery is stale.
+    age_job(job.id)
+    task.apply(args=[str(job.id)], throw=True)
+    run_watchdog_for(project_id)
+    with SessionLocal() as db:
+        saved = get_job(db, OWNER, job.id)
+        assert (saved.status, saved.error_code) == ("failed", "timeout")
+
+
+def test_watchdog_preserves_fresh_and_terminal_jobs(project_id):
+    celery.loader.import_default_modules()
+    with SessionLocal.begin() as db:
+        finished = create_job(db, OWNER, project_id, "analysis", DIGEST, None)
+        transition_job(
+            db, finished.id, "queued", "failed", stage="failed", progress=0, error="job_failed"
+        )
+    age_job(finished.id)
+    with SessionLocal.begin() as db:
+        fresh = create_job(db, OWNER, project_id, "analysis", DIGEST, None)
+        original_finish = db.get(GenerationJob, finished.id).finished_at
+    run_watchdog_for(project_id)
+    with SessionLocal() as db:
+        assert get_job(db, OWNER, fresh.id).status == "queued"
+        saved = get_job(db, OWNER, finished.id)
+        assert (saved.status, saved.error_code, saved.finished_at) == (
+            "failed",
+            "job_failed",
+            original_finish,
+        )

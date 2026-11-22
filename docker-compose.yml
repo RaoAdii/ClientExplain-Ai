@@ -44,18 +44,28 @@ services:
       retries: 10
     profiles: [app]
   worker:
-    build:
+    build: &worker_build
       context: .
       dockerfile: infrastructure/docker/worker.Dockerfile
     env_file: .env
-    environment:
+    environment: &worker_environment
       DATABASE_URL: postgresql+psycopg://clientexplain:${POSTGRES_PASSWORD}@postgres:5432/clientexplain
       REDIS_URL: redis://redis:6379/0
       PRIVATE_STORAGE_ROOT: /home/worker/private-storage
     volumes: ["private_storage:/home/worker"]
     depends_on:
+      job-watchdog: {condition: service_started}
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
+    profiles: [app]
+  job-watchdog:
+    build: *worker_build
+    command: ["python", "-m", "worker.tasks.watchdog"]
+    env_file: .env
+    environment: *worker_environment
+    depends_on:
+      postgres: {condition: service_healthy}
+    restart: unless-stopped
     profiles: [app]
 volumes:
   postgres_data:
