@@ -1,6 +1,11 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  QueryClient,
+  QueryClientProvider,
+  useQuery,
+} from "@tanstack/react-query";
+import { AuthApiError, AuthRetryableFetchError } from "@supabase/supabase-js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { AuthForm } from "./auth-form";
@@ -252,6 +257,155 @@ describe("Registration and verification", () => {
 });
 
 describe("Workspace session", () => {
+  it.each([
+    ["offline", new AuthRetryableFetchError("Network unavailable", 0)],
+    ["network failure", new TypeError("Failed to fetch")],
+    [
+      "rate limit",
+      new AuthApiError("Too many requests", 429, "over_request_rate_limit"),
+    ],
+    ["server failure", new AuthRetryableFetchError("Service unavailable", 503)],
+  ])("keeps the session and permits retry after %s", async (_, error) => {
+    const client = mount(<DashboardShell>Private workspace</DashboardShell>);
+    await screen.findByText("Private workspace");
+    client.setQueryData(["projects"], [{ name: "Private case" }]);
+    mocks.auth.getUser.mockResolvedValueOnce({
+      data: { user: null },
+      error,
+    });
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: ["session"] });
+    });
+    expect(await screen.findByRole("alert")).toHaveTextContent(error.message);
+    expect(mocks.replace).not.toHaveBeenCalled();
+    expect(client.getQueryData(["projects"])).toEqual([
+      { name: "Private case" },
+    ]);
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          profile: { id: "user-1", display_name: "Lawyer" },
+          firm: { id: "firm-1", name: "Example Legal" },
+          role: "lawyer",
+        }),
+        { status: 200 },
+      ),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByText("Private workspace")).toBeInTheDocument();
+    expect(mocks.replace).not.toHaveBeenCalled();
+  });
+  it("expires the session after a definitive identity rejection", async () => {
+    mocks.auth.getUser.mockResolvedValue({
+      data: { user: null },
+      error: new AuthApiError("Invalid JWT", 401, "bad_jwt"),
+    });
+    const client = mount(<DashboardShell>Private workspace</DashboardShell>);
+    client.setQueryData(["projects"], [{ name: "Private case" }]);
+    await waitFor(() =>
+      expect(mocks.replace).toHaveBeenCalledWith(
+        "/login?reason=session-expired",
+      ),
+    );
+    expect(client.getQueryData(["projects"])).toBeUndefined();
+    expect(screen.queryByText("Private workspace")).not.toBeInTheDocument();
+  });
+  it.each(["SIGNED_IN", "INITIAL_SESSION", "TOKEN_REFRESHED", "USER_UPDATED"])(
+    "cancels old requests and removes private cache before a different user loads on %s",
+    async (event) => {
+      function PrivateProjects() {
+        const projects = useQuery({
+          queryKey: ["projects"],
+          staleTime: Infinity,
+          queryFn: async () => [{ name: "New user's case" }],
+        });
+        return <p>{projects.data?.[0]?.name}</p>;
+      }
+      const client = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      });
+      client.setQueryData(["projects"], [{ name: "Old user's case" }]);
+      render(
+        <QueryClientProvider client={client}>
+          <DashboardShell>
+            <PrivateProjects />
+          </DashboardShell>
+        </QueryClientProvider>,
+      );
+      await screen.findByText("Old user's case");
+      let oldSignal: AbortSignal | undefined;
+      let finishOldRequest!: (value: string) => void;
+      const oldRequest = client
+        .fetchQuery({
+          queryKey: ["private-document"],
+          queryFn: ({ signal }) => {
+            oldSignal = signal;
+            return new Promise<string>((resolve) => {
+              finishOldRequest = resolve;
+            });
+          },
+        })
+        .catch(() => undefined);
+      const nextUser = { ...user, id: "user-2", email: "other@example.com" };
+      mocks.auth.getSession.mockResolvedValue({
+        data: { session: { user: nextUser, access_token: "next-token" } },
+        error: null,
+      });
+      let finishIdentity!: (value: unknown) => void;
+      mocks.auth.getUser.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishIdentity = resolve;
+          }),
+      );
+      vi.mocked(fetch).mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            profile: { id: "user-2", display_name: "Other lawyer" },
+            firm: { id: "firm-2", name: "Other Firm" },
+            role: "lawyer",
+          }),
+          { status: 200 },
+        ),
+      );
+      const callback = mocks.auth.onAuthStateChange.mock.calls.at(-1)![0];
+      await act(async () => callback(event, { user: nextUser }));
+      await waitFor(() => expect(oldSignal?.aborted).toBe(true));
+      expect(client.getQueryData(["projects"])).toBeUndefined();
+      expect(screen.queryByText("Old user's case")).not.toBeInTheDocument();
+      await act(async () => {
+        finishIdentity({ data: { user: nextUser }, error: null });
+        finishOldRequest("Old private document");
+        await oldRequest;
+      });
+      expect(await screen.findByText("Other Firm")).toBeInTheDocument();
+      expect(await screen.findByText("New user's case")).toBeInTheDocument();
+      expect(client.getQueryData(["private-document"])).toBeUndefined();
+      expect(mocks.replace).not.toHaveBeenCalled();
+    },
+  );
+  it("preserves private cache when a token refresh keeps the same user", async () => {
+    const client = mount(<DashboardShell>Private workspace</DashboardShell>);
+    await screen.findByText("Private workspace");
+    client.setQueryData(["projects"], [{ name: "Private case" }]);
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          profile: { id: "user-1", display_name: "Lawyer" },
+          firm: { id: "firm-1", name: "Updated Legal" },
+          role: "lawyer",
+        }),
+        { status: 200 },
+      ),
+    );
+    const callback = mocks.auth.onAuthStateChange.mock.calls.at(-1)![0];
+    await act(async () => callback("TOKEN_REFRESHED", { user }));
+    expect(await screen.findByText("Updated Legal")).toBeInTheDocument();
+    expect(client.getQueryData(["projects"])).toEqual([
+      { name: "Private case" },
+    ]);
+    expect(mocks.replace).not.toHaveBeenCalled();
+  });
   it("shows verified account, firm and role", async () => {
     mount(<Settings />);
     expect(await screen.findByText("Example Legal")).toBeInTheDocument();
