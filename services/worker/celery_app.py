@@ -2,6 +2,8 @@ from uuid import UUID
 
 from app.core.config import settings
 from celery import Celery, Task
+from celery.exceptions import Reject
+from celery.utils.time import get_exponential_backoff_interval
 
 app = Celery(
     "clientexplain",
@@ -24,11 +26,19 @@ app.conf.update(
 
 
 class JobTask(Task):
-    autoretry_for = (ConnectionError, TimeoutError)
-    retry_backoff = True
-    retry_backoff_max = 60
-    retry_jitter = True
-    max_retries = 3
+    processing_retry_limit = 3
+    # Persisting a terminal outcome must still be deliverable after a long DB outage.
+    max_retries = None
+
+    def retry_delivery(self, headers=None):
+        delay = get_exponential_backoff_interval(
+            factor=1, retries=min(self.request.retries, 6), maximum=60, full_jitter=True
+        )
+        try:
+            raise self.retry(countdown=max(1, delay), headers=headers)
+        except Reject:
+            # Keep the original late-acknowledged delivery if retry publication failed.
+            raise Reject("Unable to schedule the job retry.", requeue=True) from None
 
 
 def task_id(value: str) -> UUID:

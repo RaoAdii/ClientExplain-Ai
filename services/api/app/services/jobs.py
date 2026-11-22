@@ -2,12 +2,12 @@ from uuid import UUID
 
 from app.core.auth import Principal
 from app.core.permissions import PROJECT_EDITORS, check_roles
-from app.models.entities import GenerationJob
+from app.models.entities import Document, GenerationJob
 from app.repositories.jobs import find_job, find_submission, insert_job
 from app.schemas.jobs import JobStatus, JobType
 from app.services.projects import require_project
 from fastapi import HTTPException
-from sqlalchemy import func, update
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 TRANSITIONS = {
@@ -15,6 +15,7 @@ TRANSITIONS = {
     "running": {"running", "queued", "cancelled", "failed", "completed"},
 }
 SAFE_ERRORS = {
+    "database_unavailable": "The job could not access storage after retrying.",
     "timeout": "The operation timed out.",
     "pipeline_unavailable": "Processing is unavailable.",
     "job_failed": "The job could not be completed.",
@@ -28,18 +29,41 @@ def create_job(
     job_type: JobType,
     request_hash: str,
     idempotency_key: str | None,
+    *,
+    document_id: UUID | None = None,
 ) -> GenerationJob:
     require_project(db, principal, project_id)
     check_roles(principal, *PROJECT_EDITORS)
     if idempotency_key is not None and not 1 <= len(idempotency_key) <= 200:
         raise HTTPException(422, "A submission key must contain between 1 and 200 characters.")
-    job = insert_job(db, principal.firm_id, project_id, job_type, request_hash, idempotency_key)
+    if job_type == "parse":
+        if document_id is None:
+            raise HTTPException(422, "A parse job requires a document.")
+        live_document = (
+            select(Document.id)
+            .where(
+                Document.id == document_id,
+                Document.project_id == project_id,
+                Document.firm_id == principal.firm_id,
+                Document.deleted_at.is_(None),
+            )
+            .with_for_update(read=True)
+        )
+        if db.scalar(live_document) is None:
+            raise HTTPException(404, "Document not found.")
+    elif document_id is not None:
+        raise HTTPException(422, "A document binding is only valid for a parse job.")
+    job = insert_job(
+        db, principal.firm_id, project_id, job_type, request_hash, idempotency_key, document_id
+    )
     if job is not None:
         return job
     if idempotency_key is not None:
         existing = find_submission(db, principal.firm_id, project_id, job_type, idempotency_key)
         if existing is not None:
-            if existing.request_hash != request_hash:
+            if existing.request_hash != request_hash or (
+                document_id and existing.request_metadata.get("document_id") != str(document_id)
+            ):
                 raise HTTPException(409, "The submission key belongs to a different request.")
             return existing
     raise HTTPException(409, "An analysis job is already active for this project.")
