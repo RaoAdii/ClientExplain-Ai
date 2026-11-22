@@ -31,3 +31,16 @@ Full-suite failure names:
 - `test_redis_rate_limits_have_headers_and_are_scoped_to_user[upload]`
 
 The older upload tests received HTTP 429 instead of their expected validation or failure responses. The new rate-limit upload test received HTTP 503 instead of HTTP 202. No real provider request or new credential was used; provider integration tests used controlled SDK HTTP transports and the existing local database.
+
+## Follow-up: concurrent terminal replay
+
+A deterministic two-session PostgreSQL test confirmed a remaining race in the first fix. A new submission holds the project row lock while its queued job is uncommitted. An old failed-job replay starts its project update and waits on that lock; `pg_blocking_pids` confirms the wait before the new submission commits. PostgreSQL retains the old statement snapshot for the newer-job existence check, allowing the waiting update to overwrite the committed queued status. The regression failed with actual status `failed` and expected status `queued` before the follow-up fix.
+
+The terminal update now compares the project's observed `updated_at` and processing status. PostgreSQL rechecks these row predicates after a lock wait, preventing stale updates. On a conflict, terminal persistence checks for a newer analysis with a fresh snapshot. Unrelated concurrent edits are retried up to three times; continued contention rolls back the terminal transaction for existing durable recovery to retry.
+
+Follow-up verification:
+
+- Focused analysis, retrieval and worker tests: **115 passed**, including the two-session regression.
+- Full backend suite: **347 passed, 1 failed**. The sole failure was Task 9's `test_expired_fixed_window_admits_again`: expected HTTP 429 for a second request, received HTTP 202. This result was sent to the Task 9 owner; no Task 9 files were changed for this fix.
+- An immediate isolated rerun of `test_expired_fixed_window_admits_again`: **1 passed**. The full-suite failure remains recorded above.
+- Full backend Ruff lint and formatting: **passed** (71 Python files formatted).

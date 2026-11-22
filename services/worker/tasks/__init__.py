@@ -300,16 +300,33 @@ def _persist_failure(db, job, error_code, retries, *, watchdog=False):
             )
             .exists()
         )
-        db.execute(
-            update(Project)
-            .where(
-                Project.id == job.project_id,
-                Project.firm_id == job.firm_id,
-                ~newer_analysis,
+        project_scope = (Project.id == job.project_id, Project.firm_id == job.firm_id)
+        for _ in range(3):
+            observed = db.execute(
+                select(Project.updated_at, Project.processing_status).where(*project_scope)
+            ).first()
+            if observed is None:
+                break
+            # NOT EXISTS alone uses the UPDATE's original statement snapshot,
+            # even after waiting for a concurrent submission's project lock.
+            # PostgreSQL rechecks these row predicates against the new tuple.
+            changed = db.execute(
+                update(Project)
+                .where(
+                    *project_scope,
+                    Project.updated_at == observed.updated_at,
+                    Project.processing_status == observed.processing_status,
+                    ~newer_analysis,
+                )
+                .values(processing_status="failed")
+                .execution_options(synchronize_session=False)
             )
-            .values(processing_status="failed")
-            .execution_options(synchronize_session=False)
-        )
+            if changed.rowcount or db.scalar(select(newer_analysis)):
+                break
+            # An unrelated edit can also change the version. Retry with a fresh
+            # snapshot so it cannot leave a terminal job's project running.
+        else:
+            raise TimeoutError("Project changed during terminal status persistence.")
     # Only consume the versions we used. A new intent or a higher retry count
     # committed after our read must survive for the next reconciliation pass.
     db.execute(

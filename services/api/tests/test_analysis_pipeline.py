@@ -1,6 +1,9 @@
 """Analysis runs real database/job/provider paths with offline SDK HTTP responses."""
 
 import json
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
+from time import monotonic, sleep
 from uuid import uuid4
 
 import httpx
@@ -20,11 +23,12 @@ from app.models.entities import (
 from app.schemas.analysis import AnalysisRequest
 from app.services.analysis import AnalysisProviders
 from app.services.jobs import create_job, transition_job
-from sqlalchemy import delete, event, func, select, update
+from sqlalchemy import delete, event, func, select, text, update
 from test_analysis_provider import backed_process, process, response_body, sdk_client, settings
 from test_rag import OWNER, VECTOR, document, source
 from worker.celery_app import app as celery
 from worker.pipelines.analysis import run_analysis_job
+from worker.tasks import engine as worker_engine
 from worker.tasks import record_failure
 
 
@@ -384,6 +388,51 @@ def test_old_terminal_failure_does_not_overwrite_newer_analysis_status(project_i
     record_failure(old_job_id, "analysis", None, "job_failed", 0)
     with SessionLocal() as db:
         assert db.get(Project, project_id).processing_status == new_status
+
+
+def test_old_failure_waiting_on_project_lock_preserves_new_queued_submission(project_id):
+    old_job_id = job_for(project_id)
+    record_failure(old_job_id, "analysis", None, "job_failed", 0)
+    update_started = Event()
+    worker_pid = None
+
+    def observe_project_update(connection, cursor, statement, parameters, context, executemany):
+        nonlocal worker_pid
+        if statement.startswith("UPDATE projects"):
+            worker_pid = connection.connection.driver_connection.info.backend_pid
+            update_started.set()
+
+    event.listen(worker_engine, "before_cursor_execute", observe_project_update)
+    try:
+        with ThreadPoolExecutor(1) as pool:
+            with SessionLocal.begin() as db:
+                project = db.scalar(
+                    select(Project).where(Project.id == project_id).with_for_update()
+                )
+                project.processing_status = "queued"
+                db.flush()
+                new_job = create_job(db, OWNER, project_id, "analysis", "b" * 64, None)
+                new_job_id = new_job.id
+                # Keep the new job and queued project invisible while the old
+                # failure's project UPDATE takes its READ COMMITTED snapshot.
+                failure = pool.submit(record_failure, old_job_id, "analysis", None, "job_failed", 0)
+                assert update_started.wait(timeout=5)
+                deadline = monotonic() + 2
+                while monotonic() < deadline:
+                    blockers = db.scalar(text("SELECT pg_blocking_pids(:pid)"), {"pid": worker_pid})
+                    if blockers:
+                        break
+                    sleep(0.01)
+                assert blockers, "Old failure did not wait on the new submission's project lock"
+            # Committing releases the project lock only after its new queued
+            # state and job are committed. Let the stale UPDATE resume.
+            failure.result(timeout=5)
+    finally:
+        event.remove(worker_engine, "before_cursor_execute", observe_project_update)
+    with SessionLocal() as db:
+        assert db.get(GenerationJob, old_job_id).status == "failed"
+        assert db.get(GenerationJob, new_job_id).status == "queued"
+        assert db.get(Project, project_id).processing_status == "queued"
 
 
 def test_watchdog_marks_abandoned_analysis_project_failed(project_id):
