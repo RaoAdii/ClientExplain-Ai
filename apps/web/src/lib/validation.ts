@@ -8,6 +8,11 @@ export const projectSchema = z.object({
     .max(200, "Use 200 characters or fewer."),
   description: z.string().trim().max(10000, "Use 10,000 characters or fewer."),
   jurisdiction: z.string().trim().max(120, "Use 120 characters or fewer."),
+  legal_area: z.string().trim().max(120, "Use 120 characters or fewer.").default(""),
+  language: z.string().trim().max(60, "Use 60 characters or fewer.").default(""),
+  target_audience: z.string().trim().max(120, "Use 120 characters or fewer.").default(""),
+  complexity: z.string().trim().min(1, "Enter a complexity or use unspecified.").max(40, "Use 40 characters or fewer.").default("unspecified"),
+  workflow_status: z.enum(["draft", "active", "archived"]).default("draft"),
 });
 export type ProjectInput = z.infer<typeof projectSchema>;
 const authEmail = z.email("Enter a valid email address.");
