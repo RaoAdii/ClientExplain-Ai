@@ -2,7 +2,7 @@ import logging
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from threading import Barrier
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from app.core.auth import DEV_FIRM, DEV_USER, Principal
@@ -883,3 +883,146 @@ def test_retry_count_raised_after_watchdog_snapshot_survives_cleanup(project_id)
     with SessionLocal() as db:
         saved = get_job(db, OWNER, job.id)
         assert raised_count and (saved.error_code, saved.retry_count) == ("database_unavailable", 3)
+
+
+@pytest.mark.parametrize("failed_write", [False, True])
+def test_legacy_watchdog_timeout_yields_to_durable_recovery_cause(project_id, failed_write):
+    celery.loader.import_default_modules()
+    with SessionLocal.begin() as db:
+        job = create_job(db, OWNER, project_id, "analysis", DIGEST, None)
+        transition_job(db, job.id, "queued", "failed", stage="failed", progress=0, error="timeout")
+        # Earlier watchdog versions did not mark their default timeout.
+        assert "watchdog_timeout" not in job.request_metadata
+        db.add(
+            JobRecovery(
+                job_id=job.id,
+                project_id=project_id,
+                firm_id=DEV_FIRM,
+                attempt_id=uuid4(),
+                error_code="database_unavailable",
+                retry_count=3,
+            )
+        )
+    if failed_write:
+
+        def fail_correction(conn, cursor, statement, params, context, executemany):
+            if statement.startswith("UPDATE generation_jobs") and "error_code" in statement:
+                raise OperationalError(None, None, ConnectionRefusedError(PRIVATE_MARKER))
+
+        event.listen(engine, "before_cursor_execute", fail_correction)
+        try:
+            with pytest.raises(OperationalError):
+                run_watchdog_for(project_id)
+        finally:
+            event.remove(engine, "before_cursor_execute", fail_correction)
+        with SessionLocal() as db:
+            saved = get_job(db, OWNER, job.id)
+            assert (saved.error_code, saved.retry_count) == ("timeout", 0)
+            assert (
+                db.scalar(
+                    select(func.count())
+                    .select_from(JobRecovery)
+                    .where(JobRecovery.job_id == job.id)
+                )
+                == 1
+            )
+    run_watchdog_for(project_id)
+    with SessionLocal() as db:
+        saved = get_job(db, OWNER, job.id)
+        assert (saved.status, saved.error_code, saved.retry_count) == (
+            "failed",
+            "database_unavailable",
+            3,
+        )
+        assert (
+            db.scalar(
+                select(func.count()).select_from(JobRecovery).where(JobRecovery.job_id == job.id)
+            )
+            == 0
+        )
+
+
+def test_custom_task_id_can_persist_terminal_recovery(project_id):
+    celery.loader.import_default_modules()
+    with SessionLocal.begin() as db:
+        job = create_job(db, OWNER, project_id, "analysis", DIGEST, None)
+    task = celery.tasks["worker.analyze_project"]
+    result = task.apply(
+        args=[str(job.id)],
+        task_id="analysis-recovery-key",
+        headers={"job_terminal_code": "database_unavailable", "job_processing_retries": 3},
+        throw=True,
+    )
+    assert result.successful(), result.result
+    with SessionLocal() as db:
+        saved = get_job(db, OWNER, job.id)
+        assert (saved.status, saved.error_code, saved.retry_count) == (
+            "failed",
+            "database_unavailable",
+            3,
+        )
+
+
+@pytest.mark.parametrize(
+    "delivery_id", ["analysis-recovery-key", "ec9f7b9e-c89b-43ac-ad87-60fd2a3f8731"]
+)
+def test_recovery_replays_reuse_transport_attempt_identity(project_id, monkeypatch, delivery_id):
+    celery.loader.import_default_modules()
+    task = celery.tasks["worker.analyze_project"]
+    headers = {"job_terminal_code": "database_unavailable", "job_processing_retries": 3}
+    with SessionLocal.begin() as db:
+        job = create_job(db, OWNER, project_id, "analysis", DIGEST, None)
+
+    def quick_lock_deadline(connection):
+        connection.exec_driver_sql("SET LOCAL lock_timeout = '50ms'")
+
+    def broker_unavailable(*args, **kwargs):
+        raise Reject("Retry publication failed.", requeue=False)
+
+    monkeypatch.setattr(task, "retry", broker_unavailable)
+    event.listen(engine, "begin", quick_lock_deadline)
+    try:
+        with SessionLocal.begin() as locker:
+            locker.scalar(select(GenerationJob).where(GenerationJob.id == job.id).with_for_update())
+            for _ in range(2):
+                task.apply(args=[str(job.id)], task_id=delivery_id, headers=headers, throw=False)
+            with SessionLocal() as db:
+                intents = db.scalars(select(JobRecovery).where(JobRecovery.job_id == job.id)).all()
+                assert len(intents) == 1 and isinstance(intents[0].attempt_id, UUID)
+                if delivery_id != "analysis-recovery-key":
+                    assert intents[0].attempt_id == UUID(delivery_id)
+    finally:
+        event.remove(engine, "begin", quick_lock_deadline)
+    result = task.apply(args=[str(job.id)], task_id=delivery_id, headers=headers, throw=True)
+    assert result.successful(), result.result
+    with SessionLocal() as db:
+        saved = get_job(db, OWNER, job.id)
+        assert (saved.error_code, saved.retry_count) == ("database_unavailable", 3)
+        assert (
+            db.scalar(
+                select(func.count()).select_from(JobRecovery).where(JobRecovery.job_id == job.id)
+            )
+            == 0
+        )
+
+
+def test_marked_explicit_timeout_keeps_its_original_cause(project_id):
+    celery.loader.import_default_modules()
+    with SessionLocal.begin() as db:
+        job = create_job(db, OWNER, project_id, "analysis", DIGEST, None)
+        transition_job(db, job.id, "queued", "failed", stage="failed", progress=0, error="timeout")
+        job.request_metadata = {"watchdog_timeout": False}
+        db.add(
+            JobRecovery(
+                job_id=job.id,
+                project_id=project_id,
+                firm_id=DEV_FIRM,
+                attempt_id=uuid4(),
+                error_code="database_unavailable",
+                retry_count=3,
+            )
+        )
+    run_watchdog_for(project_id)
+    with SessionLocal() as db:
+        saved = get_job(db, OWNER, job.id)
+        assert (saved.error_code, saved.retry_count) == ("timeout", 3)

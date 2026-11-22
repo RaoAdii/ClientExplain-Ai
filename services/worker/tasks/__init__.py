@@ -1,6 +1,6 @@
 from contextlib import contextmanager
 from datetime import timedelta
-from uuid import UUID
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from app.core.config import settings
 from app.models.entities import Document, GenerationJob, JobRecovery
@@ -140,6 +140,15 @@ def _load_intent(job_id, kind, document_id):
         return intent[:2] if intent is not None else None
 
 
+def _attempt_uuid(task_id: str) -> UUID:
+    try:
+        return UUID(task_id)
+    except ValueError:
+        # Celery accepts arbitrary transport IDs. Keep their stable identity
+        # without persisting custom text in the recovery table.
+        return uuid5(NAMESPACE_URL, f"clientexplain:celery-task:{task_id}")
+
+
 def _remember_intent(job_id, kind, document_id, error_code, retries, attempt_id):
     with _transaction() as db:
         # A plain MVCC read validates tenant/document ancestry without waiting for
@@ -151,7 +160,7 @@ def _remember_intent(job_id, kind, document_id, error_code, retries, attempt_id)
             job_id=job.id,
             firm_id=job.firm_id,
             project_id=job.project_id,
-            attempt_id=UUID(attempt_id),
+            attempt_id=_attempt_uuid(attempt_id),
             error_code=error_code,
             retry_count=retries,
         )
@@ -236,8 +245,17 @@ def _persist_failure(db, job, error_code, retries, *, watchdog=False):
     elif job.status == "failed":
         # A watchdog expiry is provisional until an already-pending terminal
         # delivery/intent supplies the original cause. Explicit outcomes win.
+        legacy_timeout = (
+            job.error_code == "timeout"
+            and "watchdog_timeout" not in metadata
+            and intent is not None
+        )
         if (
-            (metadata.get("watchdog_timeout") or job.error_code == "pipeline_unavailable")
+            (
+                metadata.get("watchdog_timeout")
+                or legacy_timeout
+                or job.error_code == "pipeline_unavailable"
+            )
             and not default_timeout
             and error_code != "pipeline_unavailable"
         ):
