@@ -26,3 +26,13 @@ export const registrationSchema = z.object({
     .max(128, "Use 128 characters or fewer."),
 });
 export type AuthInput = z.infer<typeof loginSchema>;
+export const recoverySchema = z.object({ email: authEmail });
+export const resetPasswordSchema = z
+  .object({
+    password: registrationSchema.shape.password,
+    confirmation: z.string(),
+  })
+  .refine((input) => input.password === input.confirmation, {
+    message: "Passwords must match.",
+    path: ["confirmation"],
+  });

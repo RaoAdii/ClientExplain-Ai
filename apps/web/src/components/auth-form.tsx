@@ -3,7 +3,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useForm } from "react-hook-form";
+import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { ArrowRight, ShieldCheck } from "lucide-react";
 import {
@@ -15,6 +15,7 @@ import { supabase } from "@/lib/supabase";
 import { useUI } from "@/stores/ui";
 import { Button } from "./ui/button";
 import { Field } from "./common";
+import { VerificationResend } from "./password-recovery";
 
 export function AuthForm({
   registering,
@@ -28,25 +29,36 @@ export function AuthForm({
   const notify = useUI((s) => s.notify);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const [pendingEmail, setPendingEmail] = useState("");
   const {
     register,
+    control,
     handleSubmit,
     formState: { errors, isSubmitting },
   } = useForm<AuthInput>({
     resolver: zodResolver(registering ? registrationSchema : loginSchema),
   });
+  const email = useWatch({ control, name: "email", defaultValue: "" });
   async function submit(input: AuthInput) {
     setMessage("");
+    setFailed(false);
     if (!supabase) {
       setMessage("Account sign-in is not configured for this installation.");
       return;
     }
     try {
       const result = registering
-        ? await supabase.auth.signUp(input)
+        ? await supabase.auth.signUp({
+            ...input,
+            options: {
+              emailRedirectTo: `${window.location.origin}/auth/callback`,
+            },
+          })
         : await supabase.auth.signInWithPassword(input);
       if (result.error) throw result.error;
       if (registering && !result.data.session) {
+        setPendingEmail(input.email);
         setMessage(
           "Check your email to confirm your account, then return to sign in.",
         );
@@ -56,6 +68,7 @@ export function AuthForm({
       queryClient.clear();
       router.push("/dashboard");
     } catch (error) {
+      setFailed(true);
       setMessage(
         error instanceof Error
           ? error.message
@@ -136,9 +149,19 @@ export function AuthForm({
         </div>
       )}
       {message && (
-        <p className="form-message" role="status">
+        <p className="form-message" role={failed ? "alert" : "status"}>
           {message}
         </p>
+      )}
+      {supabase && (!registering || pendingEmail) && (
+        <>
+          {!registering && (
+            <p>
+              <Link href="/forgot-password">Forgot password?</Link>
+            </p>
+          )}
+          <VerificationResend email={pendingEmail || email} />
+        </>
       )}
       {localEnabled && (
         <div className="local-access">

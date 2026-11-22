@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   LayoutDashboard,
@@ -29,19 +29,17 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
-  const session = useSession();
+  const session = useSession(true);
   const notify = useUI((s) => s.notify);
-  useEffect(() => {
-    if (session.data && !session.data.authenticated) router.replace("/login");
-  }, [session.data, router]);
   async function signOut() {
     try {
       if (supabase) {
         const { error } = await supabase.auth.signOut();
         if (error) throw error;
+      } else {
+        const result = await fetch("/api/dev-session", { method: "DELETE" });
+        if (!result.ok) throw new Error("Unable to sign out. Please retry.");
       }
-      const result = await fetch("/api/dev-session", { method: "DELETE" });
-      if (!result.ok) throw new Error("Unable to sign out. Please retry.");
       queryClient.clear();
       router.replace("/login");
       notify("You are signed out.");
@@ -90,7 +88,9 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
           <span className="workspace-avatar">CE</span>
           <div>
             <strong>
-              {session.data.local ? "Local workspace" : "My workspace"}
+              {session.data.local
+                ? "Local workspace"
+                : session.data.account?.firm.name || "My workspace"}
             </strong>
             <span>Legal process studio</span>
           </div>

@@ -2,6 +2,8 @@
 import { ShieldCheck, Database, Palette } from "lucide-react";
 import { useSession } from "@/hooks/use-session";
 import { Card, PageHeader } from "./common";
+import Link from "next/link";
+import { VerificationResend } from "./password-recovery";
 
 export function Settings() {
   const { data } = useSession();
@@ -27,9 +29,29 @@ export function Settings() {
                 "No cloud account connected"
               )}
             </dd>
+            {data?.authenticated && !data.local && (
+              <>
+                <dt>Email verification</dt>
+                <dd>{data.verified ? "Verified" : "Awaiting verification"}</dd>
+                <dt>Active firm</dt>
+                <dd>{data.account?.firm.name || "Unavailable"}</dd>
+                <dt>Role</dt>
+                <dd>{data.account?.role || "Unavailable"}</dd>
+              </>
+            )}
             <dt>Professional review</dt>
             <dd>Required for all AI-generated explanations</dd>
           </dl>
+          {data?.authenticated && !data.local && (
+            <>
+              <p>
+                <Link href="/forgot-password">Change password</Link>
+              </p>
+              {!data.verified && data.email && (
+                <VerificationResend email={data.email} />
+              )}
+            </>
+          )}
         </Card>
         <Card>
           <Database className="setting-icon" />
@@ -51,8 +73,8 @@ export function Settings() {
             follows your device’s reduced-motion preference.
           </p>
           <p className="field-hint">
-            Firm administration, custom branding, and account management are
-            planned for later releases.
+            Firm administration and custom branding are planned for later
+            releases.
           </p>
         </Card>
       </div>
