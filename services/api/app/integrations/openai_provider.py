@@ -173,8 +173,8 @@ class OpenAILegalAnalysisProvider(_OpenAIProvider):
         messages = analysis_messages(request, evidence)
         for attempt in range(2):
             try:
-                response = _call(
-                    lambda: self.client.responses.parse(
+                raw_response = _call(
+                    lambda: self.client.responses.with_raw_response.parse(
                         model=self.settings.openai_analysis_model,
                         input=messages,
                         text_format=LegalProcess,
@@ -182,16 +182,22 @@ class OpenAILegalAnalysisProvider(_OpenAIProvider):
                         max_output_tokens=16000,
                     )
                 )
-                # Refusal and incomplete results are terminal, never validation-repair inputs.
+                # Inspect the envelope before the SDK eagerly validates output text.
+                # Refusal and truncation must never become validation-repair inputs.
+                envelope = raw_response.http_response.json()
                 if any(
-                    content.type == "refusal"
-                    for output in response.output
-                    if output.type == "message"
-                    for content in output.content
+                    content.get("type") == "refusal"
+                    for output in envelope.get("output", [])
+                    if output.get("type") == "message"
+                    for content in output.get("content", [])
                 ):
                     raise ProviderRefused()
-                if response.status != "completed":
+                if (
+                    envelope.get("status") != "completed"
+                    or envelope.get("incomplete_details") is not None
+                ):
                     raise ProviderInvalidResponse()
+                response = _call(raw_response.parse)
                 if response.output_parsed is None:
                     raise ValueError("Missing structured output")
                 return LegalProcess.model_validate(

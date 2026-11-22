@@ -375,6 +375,47 @@ def test_policy_refusal_or_incomplete_response_never_retries(mode):
     assert "private refusal" not in str(exc.value)
 
 
+@pytest.mark.parametrize("status", ["incomplete", "completed"])
+def test_incomplete_envelope_with_truncated_json_is_terminal_before_structured_parsing(status):
+    calls = []
+    body = response_body(status=status)
+    body["incomplete_details"] = {"reason": "max_output_tokens"}
+    body["output"][0]["content"][0]["text"] = '{"private truncated output":'
+
+    def respond(request):
+        calls.append(request)
+        return httpx.Response(200, json=body if len(calls) == 1 else response_body(process()))
+
+    with pytest.raises(ProviderInvalidResponse) as exc:
+        OpenAILegalAnalysisProvider(settings(), client=sdk_client(respond)).analyze(
+            analysis_request(), []
+        )
+    assert len(calls) == 1
+    assert exc.value.retryable is False
+    assert "private" not in str(exc.value)
+
+
+@pytest.mark.parametrize("refusal_first", [False, True])
+def test_completed_refusal_with_malformed_output_never_attempts_validation_repair(refusal_first):
+    calls = []
+    body = response_body()
+    content = body["output"][0]["content"]
+    content[0]["text"] = '{"private malformed output":'
+    content.insert(0 if refusal_first else 1, {"type": "refusal", "refusal": "private refusal"})
+
+    def respond(request):
+        calls.append(request)
+        return httpx.Response(200, json=body if len(calls) == 1 else response_body(process()))
+
+    with pytest.raises(ProviderRefused) as exc:
+        OpenAILegalAnalysisProvider(settings(), client=sdk_client(respond)).analyze(
+            analysis_request(), []
+        )
+    assert len(calls) == 1
+    assert exc.value.retryable is False
+    assert "private" not in str(exc.value)
+
+
 @pytest.mark.parametrize(
     "status,expected,retryable",
     [
