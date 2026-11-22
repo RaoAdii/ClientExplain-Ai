@@ -1,8 +1,8 @@
 # Global quality checklist
 
-Updated and reverified 2026-11-18. This checklist covers implemented Step 1 surfaces and must be repeated after each later stage. Passing the foundation does not certify legal compliance or production readiness of unfinished capabilities. Explicit PASS/BLOCKED evidence from the completion audit is in `step-1-completion-audit-2026-11-18.md`.
+Updated 2026-11-23 for Step 2. The 32 requirements below retain their existing browser coverage; the Task 13 report distinguishes fresh checks from browser execution limitations. This checklist does not certify legal compliance or production readiness. See `step-2-report.md` for exact PASS/BLOCKED evidence.
 
-| # | Requirement | Step 1 status / evidence |
+| # | Requirement | Step 2 coverage / evidence |
 |---|---|---|
 | 1 | No horizontal scrolling | Browser checks at desktop, mobile and 320px widths |
 | 2 | Fix broken links | Browser checks of public internal links and project navigation |
@@ -14,7 +14,7 @@ Updated and reverified 2026-11-18. This checklist covers implemented Step 1 surf
 | 8 | Custom 404 | Real 404 response and recovery link verified |
 | 9 | Dynamic copyright year | Rendered with current year in both footers |
 | 10 | Optimized images | No raster assets; compact SVG favicon and Lucide icons |
-| 11 | No broken buttons | Project CRUD, cancellation, retry, local login, sign-out tested; future actions are not offered |
+| 11 | No broken buttons | Project CRUD, upload/delete, disabled analysis, cancellation, retry, local login and sign-out covered by browser tests |
 | 12 | Success messages | Real successful mutations trigger accessible notifications |
 | 13 | Useful errors | Validation, API failures, session failures and missing projects have explicit states |
 | 14 | No unfinished placeholder copy | Product-specific text and honest empty states; legal draft gaps are explicitly explained |
@@ -49,15 +49,19 @@ Updated and reverified 2026-11-18. This checklist covers implemented Step 1 surf
 - Server-side development token remains outside the browser bundle; local HTTP-only cookie and same-origin mutation checks.
 - RLS independently tested under a non-superuser role; local bootstrap superuser remains unsuitable as a production runtime account.
 - Credentials are generated into ignored local env files; package and Python dependency versions are locked.
-- No AI inference or fabricated legal output in the API process.
+- No inference libraries or fabricated legal output in the API process; parsing and provider orchestration run in the worker.
 
 ## Required before later production delivery
 
 - Configure and test real Supabase registration, confirmation, sign-in, recovery, key rotation and account removal.
-- Implement and verify private Storage policies with document processing.
-- Benchmark and license-check a diffusion model; implement local/hosted adapters and resource limits. No model or embedding dimension selected yet.
-- Implement retrieval/citation quality controls, mandatory professional review, versioning and exports in their designated stages.
-- Apply production runtime DB role, TLS, rate limiting, backup/restore testing, retention and incident response.
+- Verify hosted private Storage bucket and policies using real credentials; local private parsing is implemented.
+- Benchmark and license-check a diffusion model; implement local/hosted adapters and resource limits. Diffusion remains unselected; analysis embeddings use text-embedding-3-small at 1536 dimensions.
+- Verify live OpenAI retrieval/citation quality after credentials and processing approval; mandatory professional review remains required. Deliver approval UI, version-history UI and exports only in their designated stages.
+- Apply production runtime DB role, TLS, deployment-level rate limiting, backup/restore testing, retention and incident response.
 - Obtain actual business identity, verified contact details and jurisdiction-specific legal review of the draft policies.
 - Run CI in GitHub after the owner creates/connects a remote; this session performs local checks only.
 - Test Firefox, Safari and real mobile devices before public launch; current automated browser coverage is Chromium desktop and mobile emulation.
+
+## Step 2 integration evidence
+
+Backend coverage includes tenant denial, restricted-role RLS, role permissions, file bounds/signatures/ZIP limits/path containment, parser failures, duplicate admission, queue failure, job retries and deletion races. Controlled provider tests cover structured-output validation, prompt-injection boundaries, citation provenance and atomic publication. Redis admission fails closed; response and request logs redact private content and credentials. See the delivery report for counts and the external verification boundary.

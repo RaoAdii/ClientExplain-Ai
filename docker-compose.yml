@@ -31,8 +31,8 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://clientexplain:${POSTGRES_PASSWORD}@postgres:5432/clientexplain
       REDIS_URL: redis://redis:6379/0
-      PRIVATE_STORAGE_ROOT: /home/appuser/private-storage
-    volumes: ["private_storage:/home/appuser"]
+      PRIVATE_STORAGE_ROOT: /var/lib/clientexplain/private-storage
+    volumes: ["private_storage:/var/lib/clientexplain"]
     ports: ["127.0.0.1:8000:8000"]
     depends_on:
       postgres: {condition: service_healthy}
@@ -51,12 +51,18 @@ services:
     environment: &worker_environment
       DATABASE_URL: postgresql+psycopg://clientexplain:${POSTGRES_PASSWORD}@postgres:5432/clientexplain
       REDIS_URL: redis://redis:6379/0
-      PRIVATE_STORAGE_ROOT: /home/worker/private-storage
-    volumes: ["private_storage:/home/worker"]
+      PRIVATE_STORAGE_ROOT: /var/lib/clientexplain/private-storage
+    volumes: ["private_storage:/var/lib/clientexplain"]
     depends_on:
       job-watchdog: {condition: service_started}
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A worker.celery_app:app inspect ping --destination celery@$$HOSTNAME --timeout 5"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 15s
     profiles: [app]
   job-watchdog:
     build: *worker_build

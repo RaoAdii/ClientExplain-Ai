@@ -1,4 +1,4 @@
-name: Foundation checks
+name: Step 2 checks
 on:
   push:
   pull_request:
@@ -7,7 +7,7 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -22,7 +22,9 @@ jobs:
       - name: Install and configure
         run: |
           npm ci
-          python -m pip install -r services/api/requirements.lock
+          python -m venv .venv
+          .venv/bin/python -m pip install -r services/api/requirements.lock
+          echo "$GITHUB_WORKSPACE/.venv/bin" >> "$GITHUB_PATH"
           python scripts/configure.py
           docker compose up -d --wait postgres redis
       - name: Migrate and seed development identity
@@ -32,29 +34,44 @@ jobs:
           alembic -c services/api/alembic.ini upgrade head
           python scripts/seed_dev.py
           alembic -c services/api/alembic.ini check
+          python scripts/audit_migrations.py
       - name: Backend checks
         run: |
           ruff check services scripts
           ruff format --check services scripts
           pytest -q --tb=short
+          python -m pip check
       - name: Frontend checks
         run: |
           npm run lint
           npm run typecheck
           npm test
           npm run build
+          npm audit --omit=dev
+      - name: Build and start API and ingestion worker
+        run: |
+          docker compose --profile app build
+          docker compose --profile app up -d --wait
+          docker compose --profile app exec -T worker celery -A worker.celery_app:app inspect ping
       - name: Browser checks
         env:
           PYTHONPATH: services/api
         run: |
           npx playwright install --with-deps chromium
-          uvicorn app.main:app --host 127.0.0.1 --port 8000 --no-access-log > /tmp/clientexplain-api.log 2>&1 &
           npm run start -w apps/web > /tmp/clientexplain-web.log 2>&1 &
           for i in $(seq 1 30); do curl -fsS http://127.0.0.1:3000/login >/dev/null && curl -fsS http://127.0.0.1:8000/api/v1/health/ready >/dev/null && break; sleep 2; done
+          curl -fsS http://127.0.0.1:3000/login >/dev/null
+          curl -fsS http://127.0.0.1:8000/api/v1/health/ready >/dev/null
           npm run test:e2e
+      - name: Collect service logs
+        if: always()
+        run: docker compose --profile app logs --no-color > /tmp/clientexplain-services.log
       - name: Preserve browser evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: browser-report
-          path: apps/web/playwright-report
+          path: |
+            apps/web/playwright-report
+            /tmp/clientexplain-services.log
+            /tmp/clientexplain-web.log

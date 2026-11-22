@@ -2,7 +2,9 @@ FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /app
 COPY services/api/requirements.lock /app/requirements.lock
-RUN pip install --no-cache-dir -r requirements.lock && useradd --create-home appuser
+RUN pip install --no-cache-dir -r requirements.lock && useradd --create-home appuser \
+    && mkdir -p /var/lib/clientexplain/private-storage \
+    && chown -R appuser:appuser /var/lib/clientexplain
 COPY services/api /app/services/api
 ENV PYTHONPATH=/app/services/api
 USER appuser

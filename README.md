@@ -1,10 +1,10 @@
 # ClientExplain AI
 
-Legal process project workspace. Step 1 foundation of a four-stage application.
+Legal process project workspace. Step 2 core application of a four-stage application.
 
-**Available:** responsive public pages, Supabase account integration, explicit local development access, persistent project CRUD, tenant isolation, audit records, migrations, separate Celery worker and automated checks.
+**Available:** responsive public pages, Supabase account integration, explicit local development access, persistent project CRUD, private PDF/DOCX/TXT uploads, asynchronous parsing and chunk inspection, tenant isolation, audit records, migrations, and a separate Celery worker. Structured analysis, embeddings, retrieval and citation publication are implemented and tested with controlled transports.
 
-**Not yet available:** document upload/processing, OpenAI analysis, retrieval, citations, diffusion generation, diagram editing, lawyer approval, version-history UI and exports. The schema reserves these capabilities; it does not claim they work. All future generated explanations require professional review. Use non-confidential test information in this foundation.
+**Blocked externally:** live OpenAI generation and hosted Supabase Auth/Storage verification require configured credentials and explicit external processing approval. Disabled analysis returns HTTP 503 without fabricated stages or citations. Diffusion generation, diagram editing, lawyer approval, version-history UI and exports are later stages. Every generated explanation requires professional review. Use only non-confidential generated fixtures locally. See [Step 2 verification report](docs/step-2-report.md).
 
 ## Windows quickstart
 
@@ -58,22 +58,15 @@ For API hot reload instead of the API container: stop that container with `docke
 With PostgreSQL/Redis running and migrations/seeding complete:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest -q --tb=short
-.\.venv\Scripts\ruff.exe check services scripts
-.\.venv\Scripts\ruff.exe format --check services scripts
-.\.venv\Scripts\alembic.exe -c services/api/alembic.ini check
-npm run lint
-npm run typecheck
-npm test
-npm run build
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1
+# Start frontend and Docker API/worker before browser checks:
 npx playwright install chromium
-# Start frontend and API, then:
-npm run test:e2e
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1 -Browser
 docker compose --profile app ps
 docker compose --profile app exec worker celery -A worker.celery_app:app inspect ping
 ```
 
-API tests create and remove their own projects. Database policy tests require the local bootstrap database role to create a temporary restricted role, rolled back afterward. Never point these tests at a production database. Playwright drives actual local CRUD, uses only non-confidential generated test names, and deletes successful test projects. Failure artifacts live in ignored `apps/web/test-results` and `apps/web/playwright-report`.
+API tests create and remove their own projects. Database policy tests require the local bootstrap database role to create a temporary restricted role, rolled back afterward. Never point these tests at a production database. Playwright drives actual local CRUD, PDF/DOCX/TXT ingestion and the expected provider-disabled response, uses only non-confidential generated test names, and deletes successful test projects. Failure artifacts live in ignored `apps/web/test-results` and `apps/web/playwright-report`.
 
 ## Supabase configuration
 
@@ -84,7 +77,7 @@ Local development does not require cloud keys. To connect a real Supabase projec
 3. Configure allowed site/redirect URLs and email confirmation in Supabase. Restart API and rebuild/restart web.
 4. Register, confirm email, then sign in. The verified subject gets a personal workspace on its first API request.
 
-No live Supabase account test is claimed without actual project configuration. Private Storage is reserved for Step 2; no bucket or upload endpoint exists yet. Standalone PostgreSQL has no references to Supabase `auth.users` or `auth.uid()`.
+No live Supabase account test is claimed without actual project configuration. For hosted private document storage also set backend `STORAGE_BACKEND=supabase`, `SUPABASE_STORAGE_BUCKET` and `SUPABASE_SERVICE_ROLE_KEY`. The adapter rejects public buckets; keep the service key server-only. Local storage is prohibited in production. Hosted storage behavior is covered by controlled HTTP transport tests, with live bucket/policy verification still blocked. Standalone PostgreSQL has no references to Supabase `auth.users` or `auth.uid()`.
 
 ## Structure
 
@@ -113,4 +106,12 @@ Empty extension directories reserve future modules; their purpose is documented,
 - The observed GPU is an RTX 3050 Laptop **6 GB**, not 4 GB. No model has been benchmarked or selected, and no large inference dependencies are loaded in FastAPI.
 - Production launch requires Supabase verification, restricted database credentials, private storage policy review, retention/backup controls, TLS, rate limits and legal review of the draft policies. See `infrastructure/deployment/README.md`.
 
-Stop at Step 1. Follow `docs/architecture.md` when beginning Step 2.
+Stop at Step 2. Step 3 is not authorized. See `docs/architecture.md` and `docs/step-2-report.md` for the implemented boundary and remaining external verification.
+
+## Step 2 workflow
+
+Create a project and enter jurisdiction, legal area, language and audience. Upload one matching PDF, DOCX or UTF-8 TXT file at a time (maximum 25 MiB). The worker parses privately stored documents and persists ordered chunks with source metadata; inspect document status/chunks and reopen the project to see persisted data. Delete documents or projects through confirmation dialogs. Redis rate limits uploads and analysis per tenant/user; duplicate content is rejected within a project.
+
+Analysis requires selected ready documents or process text, request-level consent, backend `AI_EXTERNAL_PROCESSING_ALLOWED=true`, `OPENAI_API_KEY` and an explicit `OPENAI_ANALYSIS_MODEL`. Leave the gate disabled until external processing is approved. Embeddings are fixed to `text-embedding-3-small`, 1536 dimensions; changing that contract requires a migration. No paid provider calls were made for this delivery. The default provider-disabled UI preserves entered text and displays a useful blocker.
+
+The API and worker share a private named volume at `/var/lib/clientexplain/private-storage`; their unprivileged users have the same UID. The watchdog reconciles interrupted terminal job writes. Readiness checks database, Redis and Alembic head `d14c3a7f2901`. Schema changes run explicitly using Alembic before starting the application images; they never run implicitly on API startup.
