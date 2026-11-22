@@ -337,7 +337,9 @@ def reconcile_stale_jobs() -> None:
                 _persist_failure(db, job, "timeout", job.retry_count, watchdog=True)
 
 
-def run_job(task: JobTask, job_id: UUID, kind: JobType, document_id: UUID | None = None) -> None:
+def run_job(
+    task: JobTask, job_id: UUID, kind: JobType, document_id: UUID | None = None, *, pipeline=None
+) -> None:
     headers = task.request.headers or {}
     terminal_code = headers.get("job_terminal_code")
     if terminal_code is not None and terminal_code not in {
@@ -357,8 +359,10 @@ def run_job(task: JobTask, job_id: UUID, kind: JobType, document_id: UUID | None
             elif not _claim(task, job_id, kind, document_id, retries):
                 return
             else:
-                # Tasks 6 and 8 will supply the actual pipelines here.
-                record_failure(job_id, kind, document_id, "pipeline_unavailable", retries)
+                if pipeline is not None:
+                    pipeline(task, job_id, document_id)
+                else:
+                    record_failure(job_id, kind, document_id, "pipeline_unavailable", retries)
                 return
         except SoftTimeLimitExceeded:
             # The independent watchdog already has the job row. No I/O before hard kill.

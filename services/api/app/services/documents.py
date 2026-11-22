@@ -11,14 +11,14 @@ from app.core.config import settings
 from app.core.permissions import PROJECT_EDITORS, check_roles
 from app.db.session import SessionLocal
 from app.integrations.storage import get_storage
-from app.models.entities import Document, GenerationJob
+from app.models.entities import Document, GenerationJob, Project
 from app.repositories.documents import find_duplicate, insert_document
 from app.schemas.documents import UploadRead
 from app.services.jobs import create_job
 from app.services.projects import require_project
 from celery import Celery
 from fastapi import HTTPException, UploadFile
-from sqlalchemy import delete, text
+from sqlalchemy import delete, select, text
 
 log = logging.getLogger("clientexplain")
 
@@ -28,6 +28,27 @@ MEDIA_TYPES = {
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     ".txt": "text/plain",
 }
+
+
+def lock_live_document(db, firm_id: UUID, project_id: UUID, document_id: UUID):
+    """Hold ancestry locks through a durable parser write, in project/document order."""
+    project = db.scalar(
+        select(Project.id)
+        .where(Project.id == project_id, Project.firm_id == firm_id)
+        .with_for_update(read=True)
+    )
+    if project is None:
+        return None
+    return db.scalar(
+        select(Document)
+        .where(
+            Document.id == document_id,
+            Document.project_id == project_id,
+            Document.firm_id == firm_id,
+            Document.deleted_at.is_(None),
+        )
+        .with_for_update()
+    )
 
 
 def tenant_context(db, principal):

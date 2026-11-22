@@ -219,7 +219,9 @@ def test_worker_recovers_a_lost_db_connection_and_acknowledges_redelivery(projec
     assert result.successful(), result.result
     with SessionLocal() as db:
         saved = get_job(db, OWNER, job.id)
-        assert (saved.status, saved.error_code) == ("failed", "pipeline_unavailable")
+        # Parse now reaches storage; this legacy fixture has no private object.
+        expected_code = "job_failed" if kind == "parse" else "pipeline_unavailable"
+        assert (saved.status, saved.error_code) == ("failed", expected_code)
         assert saved.retry_count == 1
         finished_at = saved.finished_at
     task.apply(args=[*prefix, str(job.id)], throw=True)
