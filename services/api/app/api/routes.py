@@ -1,4 +1,4 @@
-from app.api import auth, projects
+from app.api import auth, documents, projects
 from app.db.session import SessionLocal, redis_client
 from fastapi import APIRouter, HTTPException
 from sqlalchemy import text
@@ -6,6 +6,7 @@ from sqlalchemy import text
 router = APIRouter(prefix="/api/v1")
 router.include_router(auth.router)
 router.include_router(projects.router)
+router.include_router(documents.router)
 
 
 @router.get("/health", tags=["Operations"])

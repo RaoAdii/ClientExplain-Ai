@@ -5,9 +5,10 @@ async function proxy(
   context: { params: Promise<{ path: string[] }> },
 ) {
   const { path } = await context.params;
+  const upload = path.length === 3 && path[2] === "documents" && request.method === "POST";
   if (
     path[0] !== "projects" ||
-    path.length > 2 ||
+    (path.length > 2 && !upload) ||
     (path[1] && !/^[0-9a-f-]{36}$/i.test(path[1]))
   ) {
     return NextResponse.json(
@@ -17,7 +18,11 @@ async function proxy(
   }
   if (request.method !== "GET") {
     const origin = request.headers.get("origin");
-    if (!origin || new URL(origin).host !== request.headers.get("host")) {
+    let sameOrigin = false;
+    try {
+      sameOrigin = !!origin && new URL(origin).origin === request.nextUrl.origin;
+    } catch {}
+    if (!sameOrigin) {
       return NextResponse.json(
         { error: { message: "Invalid request origin." } },
         { status: 403 },
@@ -35,28 +40,65 @@ async function proxy(
       { error: { message: "Sign in to access your workspace." } },
       { status: 401 },
     );
+  const configuredLimit = Number(process.env.MAX_UPLOAD_BYTES || 25 * 1024 * 1024);
+  const fileLimit = Number.isSafeInteger(configuredLimit) && configuredLimit > 0
+    ? Math.min(configuredLimit, 25 * 1024 * 1024)
+    : 25 * 1024 * 1024;
+  // Reserve bounded space for multipart framing; the API checks the file limit itself.
+  const requestLimit = upload ? fileLimit + 64 * 1024 : 80000;
+  const contentLength = request.headers.get("content-length");
+  if (contentLength && (!/^\d+$/.test(contentLength) || Number(contentLength) > requestLimit)) {
+    return NextResponse.json(
+      { error: { message: "Request is too large." } },
+      { status: 413 },
+    );
+  }
+  let tooLarge = false;
+  const reader = !["GET", "DELETE"].includes(request.method) ? request.body?.getReader() : undefined;
+  let bytes = 0;
+  const body = reader ? new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const chunk = await reader.read();
+        if (chunk.done) {
+          controller.close();
+          return;
+        }
+        bytes += chunk.value.byteLength;
+        if (bytes > requestLimit) {
+          tooLarge = true;
+          await reader.cancel();
+          controller.error(new Error("Request is too large."));
+          return;
+        }
+        controller.enqueue(chunk.value);
+      } catch (error) {
+        controller.error(error);
+      }
+    },
+    cancel(reason) { return reader.cancel(reason); },
+  }) : undefined;
   try {
-    const body = ["GET", "DELETE"].includes(request.method)
-      ? undefined
-      : await request.text();
-    if (body && body.length > 80000)
+    const init: RequestInit & { duplex?: "half" } = {
+      method: request.method,
+      headers: {
+        "Content-Type": request.headers.get("content-type") || "application/json",
+        Authorization: authorization,
+      },
+      body,
+      ...(body ? { duplex: "half" as const } : {}),
+      cache: "no-store",
+      signal: AbortSignal.timeout(upload ? 120000 : 10000),
+    };
+    const response = await fetch(
+      `${process.env.API_INTERNAL_URL || "http://127.0.0.1:8000"}/api/v1/${path.join("/")}${request.nextUrl.search}`,
+      init,
+    );
+    if (tooLarge)
       return NextResponse.json(
         { error: { message: "Request is too large." } },
         { status: 413 },
       );
-    const response = await fetch(
-      `${process.env.API_INTERNAL_URL || "http://127.0.0.1:8000"}/api/v1/${path.join("/")}${request.nextUrl.search}`,
-      {
-        method: request.method,
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: authorization,
-        },
-        body,
-        cache: "no-store",
-        signal: AbortSignal.timeout(10000),
-      },
-    );
     return new NextResponse(
       response.status === 204 ? null : await response.text(),
       {
@@ -68,6 +110,11 @@ async function proxy(
       },
     );
   } catch {
+    if (tooLarge)
+      return NextResponse.json(
+        { error: { message: "Request is too large." } },
+        { status: 413 },
+      );
     return NextResponse.json(
       {
         error: {
@@ -77,6 +124,8 @@ async function proxy(
       },
       { status: 503 },
     );
+  } finally {
+    await reader?.cancel().catch(() => {});
   }
 }
 export { proxy as GET, proxy as POST, proxy as PATCH, proxy as DELETE };
