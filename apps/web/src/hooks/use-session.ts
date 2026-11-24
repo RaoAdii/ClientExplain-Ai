@@ -22,7 +22,10 @@ type WorkspaceSession = {
   account?: Account;
 };
 
-export function useSession(guard = false) {
+export function useSession(
+  guard = false,
+  explicitSignOut?: { current: boolean },
+) {
   const router = useRouter();
   const client = useQueryClient();
   const notify = useUI((state) => state.notify);
@@ -94,8 +97,10 @@ export function useSession(guard = false) {
           local: false,
         });
         client.clear();
-        notify("Your session has ended. Sign in again to continue.", "error");
-        router.replace("/login?reason=session-expired");
+        if (!explicitSignOut?.current) {
+          notify("Your session has ended. Sign in again to continue.", "error");
+          router.replace("/login?reason=session-expired");
+        }
       } else if (
         session &&
         currentUserId.current !== undefined &&
@@ -121,12 +126,18 @@ export function useSession(guard = false) {
       }
     });
     return () => subscription.unsubscribe();
-  }, [client, guard, notify, router, sessionVersion]);
+  }, [client, explicitSignOut, guard, notify, router, sessionVersion]);
   useEffect(() => {
-    if (!guard || !query.data || query.data.authenticated) return;
+    if (
+      !guard ||
+      !query.data ||
+      query.data.authenticated ||
+      explicitSignOut?.current
+    )
+      return;
     client.clear();
     notify("Your session has ended. Sign in again to continue.", "error");
     router.replace("/login?reason=session-expired");
-  }, [client, guard, notify, query.data, router]);
+  }, [client, explicitSignOut, guard, notify, query.data, router]);
   return query;
 }

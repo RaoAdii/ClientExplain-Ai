@@ -102,6 +102,7 @@ test("real project, document processing, unavailable analysis, persistence and d
   isMobile,
 }) => {
   const errors: string[] = [];
+  const initialViewport = page.viewportSize();
   page.on("pageerror", (error) => errors.push(error.message));
   page.on("console", (message) => {
     if (message.type() === "error") errors.push(message.text());
@@ -227,10 +228,16 @@ test("real project, document processing, unavailable analysis, persistence and d
       () => document.documentElement.scrollWidth <= window.innerWidth,
     ),
   ).toBe(true);
-  if (isMobile)
+  if (isMobile) {
+    if (!initialViewport) throw new Error("Mobile project requires a viewport.");
+    await page.setViewportSize(initialViewport);
+    await expect(
+      page.getByRole("button", { name: "Open workspace navigation" }),
+    ).toBeVisible();
     await page
       .getByRole("button", { name: "Open workspace navigation" })
       .click();
+  }
   await page.getByRole("button", { name: "Sign out", exact: true }).click();
   await expect(page).toHaveURL(/login/);
   await page.goto("/dashboard/projects");

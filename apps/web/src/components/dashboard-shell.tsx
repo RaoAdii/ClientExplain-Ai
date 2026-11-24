@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   LayoutDashboard,
@@ -29,9 +29,11 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
-  const session = useSession(true);
+  const explicitSignOut = useRef(false);
+  const session = useSession(true, explicitSignOut);
   const notify = useUI((s) => s.notify);
   async function signOut() {
+    explicitSignOut.current = true;
     try {
       if (supabase) {
         const { error } = await supabase.auth.signOut();
@@ -44,6 +46,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
       router.replace("/login");
       notify("You are signed out.");
     } catch (error) {
+      explicitSignOut.current = false;
       notify(
         error instanceof Error ? error.message : "Sign-out failed.",
         "error",

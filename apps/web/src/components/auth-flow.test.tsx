@@ -427,6 +427,59 @@ describe("Workspace session", () => {
     expect(client.getQueryData(["projects"])).toBeUndefined();
     expect(screen.queryByText("Private workspace")).not.toBeInTheDocument();
   });
+  it("redirects an explicit logout to normal sign-in, not session expiry", async () => {
+    mount(<DashboardShell>Private workspace</DashboardShell>);
+    await screen.findByText("Private workspace");
+    mocks.auth.signOut.mockImplementation(async () => {
+      const callback = mocks.auth.onAuthStateChange.mock.calls.at(-1)![0];
+      callback("SIGNED_OUT", null);
+      return { error: null };
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: /sign out/i }));
+
+    await waitFor(() => expect(mocks.replace).toHaveBeenCalledWith("/login"));
+    expect(mocks.replace).not.toHaveBeenCalledWith(
+      "/login?reason=session-expired",
+    );
+  });
+  it("removes authenticated application state during explicit logout", async () => {
+    const client = mount(
+      <DashboardShell>Private workspace</DashboardShell>,
+    );
+    await screen.findByText("Private workspace");
+    client.setQueryData(["projects"], [{ name: "Private case" }]);
+    mocks.auth.signOut.mockImplementation(async () => {
+      const callback = mocks.auth.onAuthStateChange.mock.calls.at(-1)![0];
+      callback("SIGNED_OUT", null);
+      return { error: null };
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: /sign out/i }));
+
+    await waitFor(() =>
+      expect(screen.queryByText("Private workspace")).not.toBeInTheDocument(),
+    );
+    expect(client.getQueryData(["projects"])).toBeUndefined();
+    expect(client.getQueryData(["session", 0])).toBeUndefined();
+  });
+  it("keeps repeated explicit logout events on one non-expired redirect path", async () => {
+    mount(<DashboardShell>Private workspace</DashboardShell>);
+    await screen.findByText("Private workspace");
+    mocks.auth.signOut.mockImplementation(async () => {
+      const callback = mocks.auth.onAuthStateChange.mock.calls.at(-1)![0];
+      callback("SIGNED_OUT", null);
+      callback("SIGNED_OUT", null);
+      return { error: null };
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: /sign out/i }));
+
+    await waitFor(() => expect(mocks.replace).toHaveBeenCalledWith("/login"));
+    expect(mocks.replace.mock.calls.map(([destination]) => destination)).toEqual([
+      "/login",
+    ]);
+  });
   it("hides cloud controls in local mode", async () => {
     mocks.cloud = false;
     vi.mocked(fetch).mockResolvedValue(

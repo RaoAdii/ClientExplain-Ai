@@ -28,6 +28,43 @@ class Principal:
     role: Role
 
 
+def provision_development_principal() -> Principal:
+    with SessionLocal.begin() as db:
+        db.execute(
+            text("SELECT set_config('app.user_id', :user_id, true)"),
+            {"user_id": str(DEV_USER)},
+        )
+        db.execute(
+            text("SELECT set_config('app.firm_id', :firm_id, true)"),
+            {"firm_id": str(DEV_FIRM)},
+        )
+        db.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:subject, 0))"),
+            {"subject": str(DEV_USER)},
+        )
+        if not db.get(Profile, DEV_USER):
+            db.add(Profile(id=DEV_USER, display_name="Developer"))
+            db.flush()
+        if not db.get(Firm, DEV_FIRM):
+            db.add(Firm(id=DEV_FIRM, name="Development Workspace"))
+            db.flush()
+        member = db.scalar(
+            select(FirmMember).where(
+                FirmMember.profile_id == DEV_USER,
+                FirmMember.firm_id == DEV_FIRM,
+            )
+        )
+        if not member:
+            db.add(
+                FirmMember(
+                    profile_id=DEV_USER,
+                    firm_id=DEV_FIRM,
+                    role="owner",
+                )
+            )
+        return Principal(DEV_USER, DEV_FIRM, Role.OWNER)
+
+
 def get_principal(credentials: HTTPAuthorizationCredentials | None = Depends(bearer)) -> Principal:
     if not credentials:
         raise HTTPException(
@@ -37,7 +74,7 @@ def get_principal(credentials: HTTPAuthorizationCredentials | None = Depends(bea
     if settings.auth_mode == "development":
         if not hmac.compare_digest(token, settings.dev_auth_token):
             raise HTTPException(401, "Invalid development session")
-        return Principal(DEV_USER, DEV_FIRM, Role.OWNER)
+        return provision_development_principal()
     try:
         key = jwks.get_signing_key_from_jwt(token)
         claims = jwt.decode(

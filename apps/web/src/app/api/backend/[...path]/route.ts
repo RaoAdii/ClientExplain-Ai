@@ -5,12 +5,30 @@ async function proxy(
   context: { params: Promise<{ path: string[] }> },
 ) {
   const { path } = await context.params;
-  const upload = path.length === 3 && path[2] === "documents" && request.method === "POST";
-  if (
-    path[0] !== "projects" ||
-    (path.length > 2 && !upload) ||
-    (path[1] && !/^[0-9a-f-]{36}$/i.test(path[1]))
-  ) {
+  const method = request.method;
+  const upload =
+    path.length === 3 && path[0] === "projects" &&
+    path[2] === "documents" && method === "POST";
+  const isUuid = (value: string | undefined) =>
+    !!value && /^[0-9a-f-]{36}$/i.test(value);
+  const projectCollection =
+    path.length === 1 && path[0] === "projects" && ["GET", "POST"].includes(method);
+  const project =
+    path.length === 2 && path[0] === "projects" && isUuid(path[1]) &&
+    ["GET", "PATCH", "DELETE"].includes(method);
+  const projectResource =
+    path.length === 3 && path[0] === "projects" && isUuid(path[1]) &&
+    ((path[2] === "documents" && ["GET", "POST"].includes(method)) ||
+      (["activity", "stages", "citations"].includes(path[2]) && method === "GET") ||
+      (path[2] === "analyze" && method === "POST"));
+  const workspaceSession =
+    path.length === 2 && path[0] === "auth" && path[1] === "me" && method === "GET";
+  const document =
+    path.length === 2 && path[0] === "documents" && isUuid(path[1]) &&
+    ["GET", "DELETE"].includes(method);
+  const job =
+    path.length === 2 && path[0] === "jobs" && isUuid(path[1]) && method === "GET";
+  if (![projectCollection, project, projectResource, workspaceSession, document, job].some(Boolean)) {
     return NextResponse.json(
       { error: { message: "Endpoint not found." } },
       { status: 404 },
@@ -20,7 +38,9 @@ async function proxy(
     const origin = request.headers.get("origin");
     let sameOrigin = false;
     try {
-      sameOrigin = !!origin && new URL(origin).origin === request.nextUrl.origin;
+      sameOrigin =
+        !!origin &&
+        new URL(origin).host === request.headers.get("host");
     } catch {}
     if (!sameOrigin) {
       return NextResponse.json(
@@ -84,6 +104,9 @@ async function proxy(
       headers: {
         "Content-Type": request.headers.get("content-type") || "application/json",
         Authorization: authorization,
+        ...(request.headers.get("idempotency-key")
+          ? { "Idempotency-Key": request.headers.get("idempotency-key")! }
+          : {}),
       },
       body,
       ...(body ? { duplex: "half" as const } : {}),

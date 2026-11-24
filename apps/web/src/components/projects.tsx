@@ -148,8 +148,10 @@ export function ProjectDetail({ id }: { id: string }) {
     try {
       await api(`projects/${id}`, { method: "DELETE" });
       await cache.invalidateQueries({ queryKey: ["projects"] });
-      cache.removeQueries({ queryKey: ["project", id] });
-      cache.removeQueries({ queryKey: ["project-activity", id] });
+      await Promise.all([
+        cache.invalidateQueries({ queryKey: ["project", id], refetchType: "none" }),
+        cache.invalidateQueries({ queryKey: ["project-activity", id], refetchType: "none" }),
+      ]);
       notify("Project deleted.");
       router.push("/dashboard/projects");
     } catch (failure) { const text = message(failure, "Unable to delete."); setError(text); notify(text, "error"); }

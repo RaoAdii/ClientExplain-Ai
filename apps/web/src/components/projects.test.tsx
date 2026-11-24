@@ -268,6 +268,21 @@ describe("Project details and activity", () => {
     await waitFor(() => expect(window.location.pathname).toBe("/dashboard/projects"));
     expect(useUI.getState().notice?.message).toMatch(/deleted/i);
   });
+  it("does not refetch a project after deleting it", async () => {
+    vi.mocked(fetch).mockImplementation(async (input, options) => {
+      if (options?.method === "DELETE") return new Response(null, { status: 204 });
+      return response(String(input).endsWith("/activity") ? [] : project);
+    });
+    mount(<ProjectDetail id="project-1" />);
+    await userEvent.click(await screen.findByRole("button", { name: "Delete project" }));
+    await userEvent.click(screen.getByRole("button", { name: "Confirm deletion" }));
+    await waitFor(() => expect(window.location.pathname).toBe("/dashboard/projects"));
+    await waitFor(() => {
+      const projectReads = vi.mocked(fetch).mock.calls.filter(([input, options]) =>
+        String(input).endsWith("/projects/project-1") && (!options?.method || options.method === "GET"));
+      expect(projectReads).toHaveLength(1);
+    });
+  });
   it.each([403, 404])("reports stale %s mutation errors while preserving the editor", async (status) => {
     vi.mocked(fetch).mockImplementation(async (input, options) => response(options?.method === "PATCH" ? { error: { message: "Request failed" } } : String(input).endsWith("/activity") ? [] : project, options?.method === "PATCH" ? status : 200));
     mount(<ProjectDetail id="project-1" />);

@@ -10,7 +10,7 @@ from app.main import app
 from app.models.entities import AuditEvent, Firm, FirmMember, Profile, Project
 from cryptography.hazmat.primitives.asymmetric import ec
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 
 @pytest.fixture
@@ -62,15 +62,30 @@ def workspace():
 def test_development_identity(client):
     assert client.get("/api/v1/auth/me").status_code == 401
     assert (
-        client.get("/api/v1/auth/me", headers={"Authorization": "Bearer wrong"}).status_code == 401
+        client.get(
+            "/api/v1/auth/me",
+            headers={"Authorization": "Bearer wrong"},
+        ).status_code
+        == 401
     )
-    me = client.get(
-        "/api/v1/auth/me", headers={"Authorization": f"Bearer {settings.dev_auth_token}"}
-    )
-    assert me.status_code == 200
-    assert me.json()["profile"]["id"] == str(auth.DEV_USER)
-    assert me.json()["firm"]["id"] == str(auth.DEV_FIRM)
-    assert me.json()["role"] == "owner"
+    headers = {"Authorization": f"Bearer {settings.dev_auth_token}"}
+    first = client.get("/api/v1/auth/me", headers=headers)
+    assert first.status_code == 200
+    assert first.json()["profile"]["id"] == str(auth.DEV_USER)
+    assert first.json()["firm"]["id"] == str(auth.DEV_FIRM)
+    assert first.json()["role"] == "owner"
+    second = client.get("/api/v1/auth/me", headers=headers)
+    assert second.status_code == 200
+    assert second.json() == first.json()
+    with SessionLocal() as db:
+        db.execute(
+            text("SELECT set_config('app.user_id', :user_id, true)"),
+            {"user_id": str(auth.DEV_USER)},
+        )
+        db.execute(
+            text("SELECT set_config('app.firm_id', :firm_id, true)"),
+            {"firm_id": str(auth.DEV_FIRM)},
+        )
 
 
 def test_expired_invalid_and_wrongly_signed_sessions(client, signed_session):
