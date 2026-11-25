@@ -41,11 +41,15 @@ def make_settings(monkeypatch):
 
     for name in (
         "AI_EXTERNAL_PROCESSING_ALLOWED",
+        "AI_PROVIDER",
         "EMBEDDING_DIMENSIONS",
         "EMBEDDING_MODEL",
         "MAX_UPLOAD_BYTES",
         "OPENAI_ANALYSIS_MODEL",
         "OPENAI_API_KEY",
+        "OLLAMA_ANALYSIS_MODEL",
+        "OLLAMA_BASE_URL",
+        "OLLAMA_EMBEDDING_MODEL",
         "PRIVATE_STORAGE_ROOT",
         "STORAGE_BACKEND",
         "SUPABASE_SERVICE_ROLE_KEY",
@@ -82,6 +86,31 @@ def test_embedding_dimension_is_1536_for_initial_model(make_settings):
     )
     with pytest.raises(ValidationError, match="EMBEDDING_MODEL.*EMBEDDING_DIMENSIONS"):
         make_settings(embedding_dimensions=3072)
+
+
+def test_ollama_requires_local_models_and_loopback_endpoint(make_settings):
+    with pytest.raises(ValidationError, match="OLLAMA_ANALYSIS_MODEL"):
+        make_settings(ai_provider="ollama")
+    configured = make_settings(
+        ai_provider="ollama",
+        ollama_analysis_model="qwen3:4b",
+        ollama_embedding_model="qwen3-embedding:4b",
+        ollama_base_url="http://127.0.0.1:11434",
+    )
+    assert configured.ai_provider == "ollama"
+    for url in (
+        "https://127.0.0.1:11434",
+        "http://example.com:11434",
+        "http://user:pass@localhost:11434",
+        "http://localhost",
+    ):
+        with pytest.raises(ValidationError, match="OLLAMA_BASE_URL"):
+            make_settings(
+                ai_provider="ollama",
+                ollama_analysis_model="qwen3:4b",
+                ollama_embedding_model="qwen3-embedding:4b",
+                ollama_base_url=url,
+            )
 
 
 def test_disabled_ai_accepts_previous_blank_embedding_configuration(make_settings, monkeypatch):

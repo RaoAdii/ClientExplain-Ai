@@ -364,11 +364,26 @@ class StageCitation(Record, Tenant, Base):
 
 class GeneratedAsset(ProjectChild, Base):
     __tablename__ = "generated_assets"
+    stage_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
     storage_key: Mapped[str] = mapped_column(Text, unique=True)
     provider: Mapped[str] = mapped_column(String(60))
     model: Mapped[str] = mapped_column(String(150))
+    media_type: Mapped[str] = mapped_column(String(80), server_default="image/svg+xml")
+    status: Mapped[str] = mapped_column(String(20), server_default="completed")
+    error_message: Mapped[str | None] = mapped_column(String(300))
     requires_review: Mapped[bool] = mapped_column(default=True)
-    __table_args__ = project_constraints()
+    __table_args__ = project_constraints(
+        ForeignKeyConstraint(
+            ["stage_id", "project_id", "firm_id"],
+            ["process_stages.id", "process_stages.project_id", "process_stages.firm_id"],
+            ondelete="CASCADE",
+        ),
+        CheckConstraint(
+            "status IN ('queued','running','completed','failed')",
+            name="ck_generated_assets_status",
+        ),
+        Index("ix_generated_assets_stage", "firm_id", "project_id", "stage_id"),
+    )
 
 
 class GenerationJob(ProjectChild, Base):
@@ -448,7 +463,33 @@ class Export(ProjectChild, Base):
     __tablename__ = "exports"
     format: Mapped[str] = mapped_column(String(10))
     storage_key: Mapped[str] = mapped_column(Text, unique=True)
+    project_version: Mapped[int] = mapped_column(Integer, server_default="0")
+    filename: Mapped[str] = mapped_column(String(255), server_default="workflow-export")
     __table_args__ = project_constraints(CheckConstraint("format IN ('pdf', 'png')"))
+
+
+class ProjectReview(ProjectChild, Base):
+    __tablename__ = "project_reviews"
+    stage_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    reviewer_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("profiles.id", ondelete="SET NULL")
+    )
+    reviewer_name: Mapped[str] = mapped_column(String(120))
+    decision: Mapped[str] = mapped_column(String(30))
+    comment: Mapped[str] = mapped_column(Text)
+    project_version: Mapped[int | None] = mapped_column(Integer)
+    __table_args__ = project_constraints(
+        ForeignKeyConstraint(
+            ["stage_id", "project_id", "firm_id"],
+            ["process_stages.id", "process_stages.project_id", "process_stages.firm_id"],
+            ondelete="SET NULL (stage_id)",
+        ),
+        CheckConstraint(
+            "decision IN ('comment','in_review','approved','changes_requested','rejected')",
+            name="ck_project_reviews_decision",
+        ),
+        Index("ix_project_reviews_project_created", "firm_id", "project_id", "created_at"),
+    )
 
 
 class AuditEvent(Record, Tenant, Base):

@@ -1,3 +1,4 @@
+from ipaddress import ip_address
 from pathlib import Path
 from typing import Literal, Self
 from urllib.parse import urlsplit
@@ -41,6 +42,10 @@ class Settings(BaseSettings):
     embedding_model: str = EMBEDDING_MODEL
     embedding_dimensions: int = EMBEDDING_DIMENSIONS
     ai_external_processing_allowed: bool = False
+    ai_provider: Literal["openai", "ollama"] = "openai"
+    ollama_base_url: str = "http://host.docker.internal:11434"
+    ollama_analysis_model: str = ""
+    ollama_embedding_model: str = ""
     retrieval_limit: int = Field(default=8, ge=1, le=50)
     retrieval_threshold: float = Field(default=0.35, ge=0, le=1)
     upload_rate_limit: PositiveInt = 10
@@ -80,9 +85,13 @@ class Settings(BaseSettings):
                 "Supabase storage requires an HTTPS SUPABASE_URL, "
                 "SUPABASE_STORAGE_BUCKET, and SUPABASE_SERVICE_ROLE_KEY"
             )
-        if self.ai_external_processing_allowed and (
-            not self.openai_api_key.get_secret_value().strip()
-            or not self.openai_analysis_model.strip()
+        if (
+            self.ai_provider == "openai"
+            and self.ai_external_processing_allowed
+            and (
+                not self.openai_api_key.get_secret_value().strip()
+                or not self.openai_analysis_model.strip()
+            )
         ):
             raise ValueError("External AI requires OPENAI_API_KEY and OPENAI_ANALYSIS_MODEL")
         if self.embedding_model == "" and not self.ai_external_processing_allowed:
@@ -96,6 +105,31 @@ class Settings(BaseSettings):
                 f"EMBEDDING_MODEL and EMBEDDING_DIMENSIONS must be {EMBEDDING_MODEL} "
                 f"and {EMBEDDING_DIMENSIONS}"
             )
+        if self.ai_provider == "ollama":
+            if not self.ollama_analysis_model.strip() or not self.ollama_embedding_model.strip():
+                raise ValueError("OLLAMA_ANALYSIS_MODEL and OLLAMA_EMBEDDING_MODEL are required")
+            parsed = urlsplit(self.ollama_base_url)
+            host = parsed.hostname or ""
+            try:
+                loopback = ip_address(host).is_loopback
+            except ValueError:
+                loopback = host.lower() in {"localhost", "host.docker.internal"}
+            try:
+                port = parsed.port
+            except ValueError:
+                port = None
+            if (
+                parsed.scheme != "http"
+                or not loopback
+                or parsed.username
+                or parsed.password
+                or parsed.query
+                or parsed.fragment
+                or port is None
+            ):
+                raise ValueError(
+                    "OLLAMA_BASE_URL must use HTTP on localhost or host.docker.internal"
+                )
         return self
 
 

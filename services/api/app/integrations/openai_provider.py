@@ -29,7 +29,7 @@ class ProviderError(Exception):
 
 class ProviderUnavailable(ProviderError):
     code = "provider_unavailable"
-    message = "External AI processing is unavailable. An operator must enable and configure it."
+    message = "AI processing is unavailable. Configure a supported provider before submitting."
 
 
 class ProviderConfigurationError(ProviderError):
@@ -103,13 +103,26 @@ def _call(operation: Callable[[], T]) -> T:
 
 def _ensure_available(settings: Settings) -> None:
     if (
-        not settings.ai_external_processing_allowed
+        settings.ai_provider != "openai"
+        or not settings.ai_external_processing_allowed
         or not settings.openai_api_key.get_secret_value().strip()
         or not settings.openai_analysis_model.strip()
         or (settings.embedding_model, settings.embedding_dimensions)
         != (EMBEDDING_MODEL, EMBEDDING_DIMENSIONS)
     ):
         raise ProviderUnavailable()
+
+
+def provider_is_configured(settings: Settings) -> bool:
+    if settings.ai_provider == "ollama":
+        return bool(
+            settings.ollama_analysis_model.strip() and settings.ollama_embedding_model.strip()
+        )
+    return bool(
+        settings.ai_external_processing_allowed
+        and settings.openai_api_key.get_secret_value().strip()
+        and settings.openai_analysis_model.strip()
+    )
 
 
 class _OpenAIProvider:
@@ -124,6 +137,9 @@ class _OpenAIProvider:
 
 
 class OpenAIEmbeddingProvider(_OpenAIProvider):
+    provider_name = "openai"
+    model_name = EMBEDDING_MODEL
+
     def embed(self, texts: list[str]) -> EmbeddingBatch:
         if (
             not isinstance(texts, list)
@@ -143,6 +159,8 @@ class OpenAIEmbeddingProvider(_OpenAIProvider):
             )
         )
         try:
+            if response.model != EMBEDDING_MODEL:
+                raise ValueError("Embedding model does not match the configured contract")
             if len(response.data) != len(texts) or [item.index for item in response.data] != list(
                 range(len(texts))
             ):
@@ -158,6 +176,9 @@ class OpenAIEmbeddingProvider(_OpenAIProvider):
 
 
 class OpenAILegalAnalysisProvider(_OpenAIProvider):
+    provider_name = "openai"
+    model_name = ""
+
     def analyze(self, request: AnalysisRequest, evidence: list[EvidenceChunk]) -> LegalProcess:
         try:
             request = AnalysisRequest.model_validate(request.model_dump())
@@ -213,8 +234,16 @@ class OpenAILegalAnalysisProvider(_OpenAIProvider):
 
 
 def get_embedding_provider(settings: Settings) -> EmbeddingProvider:
+    if settings.ai_provider == "ollama":
+        from app.integrations.ollama_provider import OllamaEmbeddingProvider
+
+        return OllamaEmbeddingProvider(settings)
     return OpenAIEmbeddingProvider(settings)
 
 
 def get_analysis_provider(settings: Settings) -> LegalAnalysisProvider:
+    if settings.ai_provider == "ollama":
+        from app.integrations.ollama_provider import OllamaLegalAnalysisProvider
+
+        return OllamaLegalAnalysisProvider(settings)
     return OpenAILegalAnalysisProvider(settings)

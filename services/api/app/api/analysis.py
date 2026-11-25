@@ -1,6 +1,9 @@
 from uuid import UUID
 
 from app.core.auth import Principal, get_principal, tenant_session
+from app.core.config import settings
+from app.integrations.ollama_provider import ollama_status
+from app.integrations.openai_provider import provider_is_configured
 from app.schemas.analysis import AnalysisRequest
 from app.schemas.editor import WorkflowRead, WorkflowWrite
 from app.schemas.jobs import JobRead
@@ -25,6 +28,18 @@ router = APIRouter(
         422: {"model": ValidationErrorRead},
     },
 )
+
+
+@router.get("/ai/status")
+def ai_status(principal: Principal = Depends(get_principal)):
+    if settings.ai_provider == "ollama":
+        return ollama_status(settings)
+    configured = provider_is_configured(settings)
+    return {
+        "provider": "openai",
+        "available": configured,
+        "reason": "configured" if configured else "not_configured",
+    }
 
 
 @router.get("/projects/{project_id}/workflow", response_model=WorkflowRead)

@@ -6,7 +6,7 @@ import json
 from app.core.config import settings
 from app.core.permissions import PROJECT_EDITORS, check_roles
 from app.db.session import SessionLocal
-from app.integrations.openai_provider import ProviderUnavailable
+from app.integrations.openai_provider import ProviderUnavailable, provider_is_configured
 from app.models.entities import (
     Document,
     DocumentChunk,
@@ -57,17 +57,18 @@ def submit_analysis(principal, project_id, request, idempotency_key, response):
                     409, "Selected documents must have completed parsing without OCR."
                 )
         # Configuration is checked without constructing clients or transmitting content.
-        if not (
-            settings.ai_external_processing_allowed
-            and settings.openai_api_key.get_secret_value().strip()
-            and settings.openai_analysis_model.strip()
-        ):
+        if not provider_is_configured(settings):
             raise ProviderUnavailable()
         identity = {
             "request": request.model_dump(mode="json"),
             "documents": [(str(doc.id), doc.sha256) for doc in documents],
-            "model": settings.openai_analysis_model,
-            "embedding_model": settings.embedding_model,
+            "provider": settings.ai_provider,
+            "model": settings.ollama_analysis_model
+            if settings.ai_provider == "ollama"
+            else settings.openai_analysis_model,
+            "embedding_model": settings.ollama_embedding_model
+            if settings.ai_provider == "ollama"
+            else settings.embedding_model,
             "embedding_dimensions": settings.embedding_dimensions,
             "prompt": SYSTEM_INSTRUCTIONS,
             "schema_version": "step2-v1",

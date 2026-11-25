@@ -60,8 +60,10 @@ def run_analysis_job(job_id, providers) -> None:
             for chunk in chunks
             if (
                 chunk.embedding is None
-                or chunk.embedding_model != EMBEDDING_MODEL
-                or chunk.embedding_provider != "openai"
+                or chunk.embedding_model
+                != getattr(providers.embedding, "model_name", EMBEDDING_MODEL)
+                or chunk.embedding_provider
+                != getattr(providers.embedding, "provider_name", "openai")
             )
         ]
     # Keep batches inside the provider's count and character limits. Existing

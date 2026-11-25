@@ -110,7 +110,11 @@ export function WorkflowEditor({ projectId, canEdit, onSaved }: { projectId: str
           edges={graph.edges.map((edge) => ({ ...edge, id: `${edge.source}:${edge.target}` }))}
           nodesDraggable={canEdit && !saving} nodesConnectable={canEdit && !saving}
           onNodeClick={(_event, node) => setSelected(node.id)}
-          onNodeDragStop={(_event, node) => change({ ...graph, stages: graph.stages.map((item) => item.id === node.id ? { ...item, position: node.position } : item) })}
+          onNodeDragStop={(_event, node) => {
+            const current = graph.stages.find((item) => item.id === node.id);
+            if (current && current.position.x === node.position.x && current.position.y === node.position.y) return;
+            change({ ...graph, stages: graph.stages.map((item) => item.id === node.id ? { ...item, position: node.position } : item) });
+          }}
           onConnect={connect} fitView minZoom={0.1} maxZoom={2} deleteKeyCode={null}>
           <Background /><Controls showInteractive={false} />
         </ReactFlow>
@@ -120,8 +124,8 @@ export function WorkflowEditor({ projectId, canEdit, onSaved }: { projectId: str
           <ol>{graph.stages.map((item, index) => <li key={item.id}><Button variant="ghost" onClick={() => setSelected(item.id)} aria-pressed={selected === item.id}>{index + 1}. {item.title}</Button></li>)}</ol>
           <h3>Dependencies</h3>
           <ul>{graph.edges.map((edge) => <li key={`${edge.source}:${edge.target}`}>{graph.stages.find((item) => item.id === edge.source)?.title} → {graph.stages.find((item) => item.id === edge.target)?.title} {canEdit && <Button variant="ghost" onClick={() => change({ ...graph, edges: graph.edges.filter((item) => item !== edge) })}>Remove connection</Button>}</li>)}</ul>
-          {canEdit && <><label>From stage<select value={source} onChange={(event) => setSource(event.target.value)}><option value="">Choose stage</option>{graph.stages.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>
-            <label>To stage<select value={target} onChange={(event) => setTarget(event.target.value)}><option value="">Choose stage</option>{graph.stages.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>
+          {canEdit && <><label htmlFor={`${fieldId}-source`}>From stage</label><select id={`${fieldId}-source`} value={source} onChange={(event) => setSource(event.target.value)}><option value="">Choose stage</option>{graph.stages.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select>
+            <label htmlFor={`${fieldId}-target`}>To stage</label><select id={`${fieldId}-target`} value={target} onChange={(event) => setTarget(event.target.value)}><option value="">Choose stage</option>{graph.stages.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select>
             <Button disabled={!source || !target || saving} onClick={() => connect({ source, target })}>Connect stages</Button></>}
         </div>
         {stage && <fieldset disabled={!canEdit || saving} className="editor-details"><legend>Stage details</legend>
@@ -129,7 +133,7 @@ export function WorkflowEditor({ projectId, canEdit, onSaved }: { projectId: str
           <label htmlFor={`${fieldId}-explanation`}>Stage explanation</label><textarea id={`${fieldId}-explanation`} maxLength={5000} value={stage.explanation} onChange={(event) => editStage({ explanation: event.target.value })} />
           <label>Responsible party<input maxLength={1000} value={stage.responsible_party || ""} onChange={(event) => editStage({ responsible_party: event.target.value || null })} /></label>
           {([['required_documents', 'Required documents'], ['actions', 'Actions'], ['preconditions', 'Preconditions'], ['outcomes', 'Possible outcomes'], ['limitations', 'Uncertainties and limitations']] as const).map(([key, label]) => <div key={key}><label htmlFor={`${fieldId}-${key}`}>{label} (one per line)</label><textarea id={`${fieldId}-${key}`} value={stage[key].join("\n")} onChange={(event) => editStage({ [key]: event.target.value.split("\n") })} /></div>)}
-          <label>Stage status<select value={stage.status} onChange={(event) => editStage({ status: event.target.value as EditorStage['status'] })}><option value="pending">Pending</option><option value="in_progress">In progress</option><option value="completed">Completed</option></select></label>
+          <label htmlFor={`${fieldId}-status`}>Stage status</label><select id={`${fieldId}-status`} value={stage.status} onChange={(event) => editStage({ status: event.target.value as EditorStage['status'] })}><option value="pending">Pending</option><option value="in_progress">In progress</option><option value="completed">Completed</option></select>
           <div className="editor-toolbar">{[-1, 1].map((delta) => <Button key={delta} variant="outline" disabled={graph.stages.indexOf(stage) + delta < 0 || graph.stages.indexOf(stage) + delta >= graph.stages.length} onClick={() => { const stages = [...graph.stages]; const index = stages.indexOf(stage); [stages[index], stages[index + delta]] = [stages[index + delta], stages[index]]; change({ ...graph, stages }); }}>{delta < 0 ? "Move earlier" : "Move later"}</Button>)}
             <Button variant="destructive" onClick={() => { if (window.confirm(`Delete stage "${stage.title}" and its connections?`)) { change({ ...graph, stages: graph.stages.filter((item) => item.id !== stage.id), edges: graph.edges.filter((edge) => edge.source !== stage.id && edge.target !== stage.id) }); setSelected(undefined); } }}>Delete stage</Button></div>
         </fieldset>}

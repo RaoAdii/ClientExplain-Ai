@@ -5,7 +5,13 @@ from app.core.permissions import PROJECT_EDITORS, check_roles
 from app.core.rate_limits import rate_limit
 from app.schemas.documents import DocumentRead, UploadRead
 from app.schemas.workflow import DocumentDetail, ErrorRead, ValidationErrorRead
-from app.services.documents import delete_document, document_detail, list_documents, upload_document
+from app.services.documents import (
+    delete_document,
+    document_detail,
+    list_documents,
+    retry_document,
+    upload_document,
+)
 from app.services.projects import require_project
 from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile
 from sqlalchemy.orm import Session
@@ -78,3 +84,13 @@ def show(
 def delete(document_id: UUID, principal: Principal = Depends(get_principal)):
     delete_document(principal, document_id)
     return Response(status_code=204)
+
+
+@router.post(
+    "/documents/{document_id}/retry",
+    response_model=UploadRead,
+    status_code=202,
+    responses={code: {"model": ErrorRead} for code in (403, 404, 409, 503)},
+)
+def retry(document_id: UUID, principal: Principal = Depends(get_principal)):
+    return retry_document(principal, document_id)

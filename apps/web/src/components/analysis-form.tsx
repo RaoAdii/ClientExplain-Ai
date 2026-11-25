@@ -1,10 +1,17 @@
 "use client";
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import type { Project } from "@/types/project";
 import type { AnalysisRequest, Job } from "@/types/analysis";
 import { api } from "@/services/api";
 import { Button } from "./ui/button";
 export function AnalysisForm({ project, selected, selectionReady, disabled, onSubmitted }: { project: Project; selected: string[]; selectionReady: boolean; disabled: boolean; onSubmitted: (job: Job) => void }) {
+  const provider = useQuery({
+    queryKey: ["ai-status"],
+    queryFn: ({ signal }) => api<{ provider: "openai" | "ollama"; available: boolean; reason: string | null }>("ai/status", { signal }),
+    retry: false,
+    staleTime: 30000,
+  });
   const [text, setText] = useState("");
   const [jurisdiction, setJurisdiction] = useState(project.jurisdiction);
   const [legalArea, setLegalArea] = useState(project.legal_area || "General");
@@ -16,7 +23,8 @@ export function AnalysisForm({ project, selected, selectionReady, disabled, onSu
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const selectionKey = JSON.stringify([...selected].sort());
-  const allowed = !!text.trim() && !!jurisdiction.trim() && !!legalArea.trim() && !!language.trim() && !!audience.trim() && selectionReady && (!selected.length || consent === selectionKey);
+  const isLocal = provider.data?.provider === "ollama";
+  const allowed = !!text.trim() && !!jurisdiction.trim() && !!legalArea.trim() && !!language.trim() && !!audience.trim() && selectionReady && provider.data?.available === true && (isLocal || !selected.length || consent === selectionKey);
   async function submit(event: React.FormEvent) {
     event.preventDefault(); if (!allowed || busy || disabled) return;
     setBusy(true); setError(null);
@@ -35,9 +43,14 @@ export function AnalysisForm({ project, selected, selectionReady, disabled, onSu
       <div className="field"><label htmlFor="analysis-complexity">Analysis complexity</label><select id="analysis-complexity" value={complexity} onChange={(event) => setComplexity(event.target.value as AnalysisRequest["complexity"])}><option value="simple">Simple</option><option value="standard">Standard</option><option value="detailed">Detailed</option></select></div>
       <div className="field"><label htmlFor="applicability-date">Applicability date (optional)</label><input id="applicability-date" type="date" value={date} onChange={(event) => setDate(event.target.value)} /></div>
     </div>
-    <p id="analysis-disclosure">Your process text and relevant excerpts from selected documents will be sent to the external AI provider for analysis. Only select documents you are authorized to process. Professional review is required before use.</p>
+    <p id="analysis-disclosure">{isLocal ? "Process text and selected document excerpts are sent to the configured local Ollama server. Professional review is required before use." : "Process text and relevant excerpts from selected documents are sent to the configured external AI provider. Only select documents you are authorized to process. Professional review is required before use."}</p>
+    {provider.isPending && <p role="status">Checking AI provider availability…</p>}
+    {provider.error && <p role="alert">AI provider status could not be checked. Analysis is unavailable until the service is reachable.</p>}
+    {provider.data && !provider.data.available && <p role="alert">{provider.data.reason === "models_not_installed" ? "The configured local AI models are not installed in Ollama." : provider.data.reason === "unreachable" ? "The local Ollama server is unreachable. Start it and verify both configured models are installed." : "AI analysis is not configured. Configure local Ollama or explicitly enable and configure the external provider."}</p>}
+    {provider.data?.available && isLocal && <p role="status">Local Ollama analysis is available. Model output remains unverified and requires professional review.</p>}
+    {provider.data?.available && !isLocal && <p role="status">The external AI provider is configured. Live provider availability is checked when analysis runs.</p>}
     <p>{selected.length} document(s) selected. Only documents with completed parsing can be included.</p>
-    {selected.length > 0 && <label className="checkbox-label"><input type="checkbox" checked={consent === selectionKey} onChange={(event) => setConsent(event.target.checked ? selectionKey : "")} />I authorize external processing of the selected documents.</label>}
+    {selected.length > 0 && !isLocal && <label className="checkbox-label"><input type="checkbox" checked={consent === selectionKey} onChange={(event) => setConsent(event.target.checked ? selectionKey : "")} />I authorize external processing of the selected documents.</label>}
     {selected.length > 0 && !selectionReady && <p role="alert">Selected documents are no longer ready. Deselect them or wait for parsing to complete.</p>}
     {error && <p role="alert">{error}</p>}
     {disabled && <p>An analysis job is active. Wait for it to finish before submitting again.</p>}

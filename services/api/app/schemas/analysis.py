@@ -161,7 +161,7 @@ EmbeddingVector = Annotated[list[FiniteFloat], Field(min_length=1536, max_length
 
 
 class EmbeddingBatch(AnalysisModel):
-    provider: Literal["openai"]
-    model: Literal["text-embedding-3-small"]
+    provider: Literal["openai", "ollama"]
+    model: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)]
     dimensions: Literal[1536]
     vectors: list[EmbeddingVector] = Field(min_length=1, max_length=128)

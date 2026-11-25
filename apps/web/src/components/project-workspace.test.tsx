@@ -16,6 +16,7 @@ const stage = { id: "s1", project_id: "p1", position: 1, title: "Prepare claim",
 const citation = { id: "c1", stage_id: "s1", claim_text: "Review evidence", excerpt: "The claim must be reviewed.", source_type: "user_document", verification_status: "unverified", validation_status: "supported", source_filename: "brief.txt", page_number: 3, heading: "Filing", source_url: null };
 function response(data: unknown, status = 200) { return new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } }); }
 let documents = [document];
+let aiProvider: { provider: "openai" | "ollama"; available: boolean; reason: string | null };
 let detail = { ...document, page_count: 1, parsing_error: null as string | null, ocr_required: false };
 let currentJob = { ...job };
 let process = { process_name: null as string | null, summary: null as string | null, stages: [] as typeof stage[], missing_information: [] as string[], limitations: [] as string[], review_required: true };
@@ -35,10 +36,12 @@ class UploadXHR {
 function mount() { const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } }); const view = render(<QueryClientProvider client={client}><ProjectWorkspace id="p1" /></QueryClientProvider>); return { client, ...view }; }
 async function fillAnalysis() { await userEvent.type(await screen.findByLabelText("Process text"), "Explain filing a civil claim."); }
 beforeEach(() => {
-  session.role = "owner"; sessionStorage.clear(); documents = [document]; detail = { ...document, page_count: 1, parsing_error: null, ocr_required: false }; currentJob = { ...job }; process = { process_name: null, summary: null, stages: [], missing_information: [], limitations: [], review_required: true };
+  session.role = "owner"; sessionStorage.clear(); documents = [document]; aiProvider = { provider: "openai", available: true, reason: "configured" }; detail = { ...document, page_count: 1, parsing_error: null, ocr_required: false }; currentJob = { ...job }; process = { process_name: null, summary: null, stages: [], missing_information: [], limitations: [], review_required: true };
   vi.stubGlobal("XMLHttpRequest", UploadXHR);
   vi.stubGlobal("fetch", vi.fn(async (input: string, options?: RequestInit) => {
     if (options?.method === "DELETE") return new Response(null, { status: 204 });
+    if (input.endsWith("/ai/status")) return response(aiProvider);
+    if (input.endsWith("/retry")) return response({ document: { ...document, status: "queued" }, job: { ...job, kind: "parse" } }, 202);
     if (input.endsWith("/documents")) return response(documents);
     if (input.includes("/documents/")) return response(detail);
     if (input.endsWith("/analyze")) return response(currentJob, 202);
@@ -89,6 +92,13 @@ describe("Document and analysis workspace", () => {
     expect(await screen.findByText("Corrupt document; upload a valid copy.")).toBeVisible();
     expect(screen.getByText(/OCR required/)).toBeVisible();
   });
+  it("retries failed document processing and tracks the accepted parse job", async () => {
+    documents = [{ ...document, status: "failed" }];
+    mount();
+    await userEvent.click(await screen.findByRole("button", { name: "Retry processing brief.txt" }));
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/backend/documents/d1/retry", expect.objectContaining({ method: "POST" })));
+    expect(await screen.findByText(/Parse job: Queued/)).toBeVisible();
+  });
   it("confirms document deletion and refreshes invalidated results", async () => {
     mount(); await userEvent.click(await screen.findByRole("button", { name: "Delete brief.txt" }));
     expect(fetch).not.toHaveBeenCalledWith("/api/backend/documents/d1", expect.objectContaining({ method: "DELETE" }));
@@ -103,12 +113,31 @@ describe("Document and analysis workspace", () => {
     await fillAnalysis(); await userEvent.clear(screen.getByLabelText("Analysis jurisdiction")); expect(submit).toBeDisabled();
     await userEvent.type(screen.getByLabelText("Analysis jurisdiction"), "England and Wales");
     await userEvent.click(screen.getByLabelText("Select brief.txt")); expect(submit).toBeDisabled();
-    expect(screen.getByText(/sent to the external AI provider/)).toBeVisible();
+    expect(screen.getByText(/sent to the configured external AI provider/)).toBeVisible();
     await userEvent.click(screen.getByLabelText(/I authorize external processing/)); await userEvent.click(submit);
     await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/backend/projects/p1/analyze", expect.objectContaining({ method: "POST", body: expect.stringContaining('"selected_document_ids":["d1"]') })));
   });
+  it("uses the local-provider disclosure without requiring external-processing consent", async () => {
+    aiProvider = { provider: "ollama", available: true, reason: null };
+    mount();
+    await fillAnalysis();
+    await userEvent.click(screen.getByLabelText("Select brief.txt"));
+    expect(screen.getByText(/configured local Ollama server/)).toBeVisible();
+    expect(screen.queryByLabelText(/authorize external processing/i)).not.toBeInTheDocument();
+    const submit = screen.getByRole("button", { name: "Analyze process" });
+    expect(submit).toBeEnabled();
+    await userEvent.click(submit);
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/backend/projects/p1/analyze", expect.objectContaining({ method: "POST" })));
+  });
+  it("blocks analysis and explains provider configuration when unavailable", async () => {
+    aiProvider = { provider: "ollama", available: false, reason: "models_not_installed" };
+    mount();
+    await fillAnalysis();
+    expect(await screen.findByRole("alert")).toHaveTextContent("configured local AI models are not installed");
+    expect(screen.getByRole("button", { name: "Analyze process" })).toBeDisabled();
+  });
   it("retains form values when the provider is unavailable and allows retry", async () => {
-    vi.mocked(fetch).mockImplementation(async (input) => String(input).endsWith("/analyze") ? response({ error: { message: "AI processing is disabled or unavailable." } }, 503) : response(String(input).endsWith("/documents") ? documents : String(input).endsWith("/stages") ? process : String(input).endsWith("/citations") || String(input).endsWith("/activity") ? [] : project));
+    vi.mocked(fetch).mockImplementation(async (input) => String(input).endsWith("/ai/status") ? response(aiProvider) : String(input).endsWith("/analyze") ? response({ error: { message: "AI processing is disabled or unavailable." } }, 503) : response(String(input).endsWith("/documents") ? documents : String(input).endsWith("/stages") ? process : String(input).endsWith("/citations") || String(input).endsWith("/activity") ? [] : project));
     mount(); await fillAnalysis(); await userEvent.click(screen.getByRole("button", { name: "Analyze process" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("AI processing is disabled or unavailable.");
     expect(screen.getByLabelText("Process text")).toHaveValue("Explain filing a civil claim."); expect(screen.getByRole("button", { name: "Analyze process" })).toBeEnabled();

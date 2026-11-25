@@ -25,12 +25,19 @@ async function proxy(
       (path[2] === "analyze" && method === "POST"));
   const workspaceSession =
     path.length === 2 && path[0] === "auth" && path[1] === "me" && method === "GET";
+  const profileUpdate =
+    path.length === 2 && path[0] === "auth" && path[1] === "me" && method === "PATCH";
+  const aiStatus =
+    path.length === 2 && path[0] === "ai" && path[1] === "status" && method === "GET";
   const document =
     path.length === 2 && path[0] === "documents" && isUuid(path[1]) &&
     ["GET", "DELETE"].includes(method);
+  const documentRetry =
+    path.length === 3 && path[0] === "documents" && isUuid(path[1]) &&
+    path[2] === "retry" && method === "POST";
   const job =
     path.length === 2 && path[0] === "jobs" && isUuid(path[1]) && method === "GET";
-  if (![projectCollection, project, projectResource, workspaceSession, document, job].some(Boolean)) {
+  if (![projectCollection, project, projectResource, workspaceSession, profileUpdate, aiStatus, document, documentRetry, job].some(Boolean)) {
     return NextResponse.json(
       { error: { message: "Endpoint not found." } },
       { status: 404 },

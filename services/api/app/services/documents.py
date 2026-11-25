@@ -221,6 +221,92 @@ def upload_document(principal: Principal, project_id: UUID, upload: UploadFile) 
         raise HTTPException(503, "The upload could not be completed. Try again shortly.") from None
 
 
+def retry_document(principal: Principal, document_id: UUID) -> UploadRead:
+    with SessionLocal.begin() as db:
+        tenant_context(db, principal)
+        document = require_document(db, principal, document_id)
+        project = require_project(db, principal, document.project_id, for_update=True)
+        check_roles(principal, *PROJECT_EDITORS)
+        document = db.scalar(
+            select(Document)
+            .where(
+                Document.id == document_id,
+                Document.project_id == project.id,
+                Document.firm_id == principal.firm_id,
+                Document.deleted_at.is_(None),
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        if document is None:
+            raise HTTPException(404, "Document not found.")
+        if document.status != "failed":
+            raise HTTPException(409, "Only failed document processing can be retried.")
+        if not document.sha256:
+            raise HTTPException(409, "This document must be uploaded again before processing.")
+        db.execute(
+            delete(DocumentChunk).where(
+                DocumentChunk.document_id == document_id,
+                DocumentChunk.firm_id == principal.firm_id,
+            )
+        )
+        document.status = "queued"
+        document.parsing_error = None
+        document.page_count = None
+        document.ocr_required = False
+        job = create_job(
+            db,
+            principal,
+            project.id,
+            "parse",
+            document.sha256,
+            None,
+            document_id=document.id,
+        )
+        audit(db, principal, "document.retry_requested", project.id)
+        result = UploadRead(document=document, job=job)
+    try:
+        dispatch_parse(document_id, job.id)
+    except Exception:
+        with SessionLocal.begin() as db:
+            tenant_context(db, principal)
+            current = db.scalar(
+                select(GenerationJob)
+                .where(
+                    GenerationJob.id == job.id,
+                    GenerationJob.firm_id == principal.firm_id,
+                    GenerationJob.project_id == project.id,
+                )
+                .with_for_update()
+            )
+            if current is not None and current.status == "queued" and current.started_at is None:
+                transition_job(
+                    db,
+                    current.id,
+                    "queued",
+                    "failed",
+                    stage="failed",
+                    progress=current.progress,
+                    error="pipeline_unavailable",
+                )
+                failed_document = db.scalar(
+                    select(Document)
+                    .where(
+                        Document.id == document_id,
+                        Document.firm_id == principal.firm_id,
+                        Document.project_id == project.id,
+                    )
+                    .with_for_update()
+                )
+                if failed_document is not None:
+                    failed_document.status = "failed"
+                    failed_document.parsing_error = "Processing could not be queued. Retry shortly."
+        raise HTTPException(
+            503, "Document processing could not be queued. Check status and retry shortly."
+        ) from None
+    return result
+
+
 def list_documents(db, principal, project_id):
     require_project(db, principal, project_id)
     return db.scalars(
