@@ -12,7 +12,7 @@ if not env.exists():
         "AUTH_MODE=development\n"
         f"DEV_AUTH_TOKEN={token}\n"
         f"POSTGRES_PASSWORD={password}\n"
-        f"DATABASE_URL=postgresql+psycopg://clientexplain:{password}@127.0.0.1:5432/clientexplain\n"
+        f"DATABASE_URL=postgresql+psycopg://clientexplain:{password}@127.0.0.1:5433/clientexplain\n"
         "REDIS_URL=redis://127.0.0.1:6379/0\n"
         "STORAGE_BACKEND=local\n"
         "PRIVATE_STORAGE_ROOT=.local/private-storage\n"
@@ -31,7 +31,7 @@ if not web_env.exists():
         if "=" in line and not line.startswith("#")
     )
     web_env.write_text(
-        f"NEXT_PUBLIC_SITE_URL=http://localhost:3000\nNEXT_PUBLIC_AUTH_MODE=development\nAPI_INTERNAL_URL=http://127.0.0.1:8000\nAUTH_MODE=development\nDEV_AUTH_TOKEN={values.get('DEV_AUTH_TOKEN', '')}\n",
+        f"APP_ENV=development\nNEXT_PUBLIC_SITE_URL=http://localhost:3000\nNEXT_PUBLIC_AUTH_MODE=development\nAPI_INTERNAL_URL=http://127.0.0.1:8000\nAUTH_MODE=development\nDEV_AUTH_TOKEN={values.get('DEV_AUTH_TOKEN', '')}\n",
         encoding="utf-8",
     )
 print("Local environment is ready. Existing files were preserved; credentials were not printed.")

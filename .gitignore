@@ -1,5 +1,7 @@
 node_modules/
 .next/
+.next-acceptance/
+.next-acceptance-build/
 .venv/
 __pycache__/
 *.py[cod]

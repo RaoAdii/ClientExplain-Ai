@@ -14,6 +14,7 @@ import { JobProgress } from "./job-progress";
 import { ProcessResults } from "./process-results";
 import { Card } from "./common";
 import { Button } from "./ui/button";
+import { WorkflowEditor } from "./workflow-editor";
 type TrackedJob = { id: string; kind: "parse" | "analysis" };
 function readJobs(id: string): TrackedJob[] {
   try { const value: unknown = JSON.parse(sessionStorage.getItem(`project-jobs:${id}`) || "[]"); return Array.isArray(value) ? value.filter((job) => typeof job?.id === "string" && ["parse", "analysis"].includes(job.kind)).slice(-50) : []; } catch { return []; }
@@ -29,6 +30,7 @@ function WorkspaceSections({ project }: { project: Project }) {
   const canEdit = ["owner", "admin", "lawyer"].includes(role || "");
   const cache = useQueryClient();
   const [selected, setSelected] = useState<string[]>([]);
+  const [editorOpen, setEditorOpen] = useState(false);
   const [jobs, setJobs] = useState<TrackedJob[]>(() => readJobs(id));
   const [jobStates, setJobStates] = useState<Record<string, Job>>({});
   const terminalSeen = useRef(new Set<string>());
@@ -48,6 +50,9 @@ function WorkspaceSections({ project }: { project: Project }) {
   const activeAnalysis = jobs.some((job) => job.kind === "analysis" && (!jobStates[job.id] || activeJob(jobStates[job.id])));
   const selectionReady = documents.isSuccess && selected.every((selectedId) => documents.data.some((document) => document.id === selectedId && document.status === "completed"));
   return <div className="project-workspace">
+    <section aria-labelledby="workflow-editor-title"><h2 id="workflow-editor-title">Visual workflow</h2><Card>
+      {editorOpen ? <WorkflowEditor projectId={id} canEdit={canEdit} onSaved={() => void refresh()} /> : <><p>Build or edit a saved workflow. Manual editing works without an AI provider.</p><Button onClick={() => setEditorOpen(true)}>Open workflow editor</Button></>}
+    </Card></section>
     <nav className="workspace-sections" aria-label="Project sections"><a href="#documents">Documents</a><a href="#analysis">Analysis</a><a href="#results">Stages and citations</a></nav>
     <section id="documents" aria-labelledby="documents-title"><h2 id="documents-title">Documents</h2><Card>
       {canEdit && <DocumentUpload projectId={id} onAccepted={(accepted: UploadAccepted) => track(accepted.job, "parse")} />}

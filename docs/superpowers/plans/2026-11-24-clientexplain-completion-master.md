@@ -62,6 +62,8 @@
 - [ ] Verify intended route, backend identity, reload persistence, normal logout, and exact cleanup.
 - [ ] Mark Step 2.2 PASS only when every criterion has evidence; otherwise retain BLOCKED/FAIL.
 
+**Quota investigation (2026-11-24):** Public Auth settings were inspected without sending email and confirm signups enabled plus confirmation required. Provider identity, configured rate limit, remaining quota and Auth logs are not public; no Management API credential is available. The documented built-in limit is 2 emails/hour/project. By 16:47 IST roughly 91 minutes had elapsed since the 429, but shared quota availability and provider configuration remained unobservable, so no retry was made. A custom SMTP guide was prepared without changing live settings. Task 2 remains BLOCKED.
+
 ### Task 3: Plan and verify Step 2.3 OpenAI integration
 
 **Files:**

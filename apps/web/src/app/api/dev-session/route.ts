@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
+import { developmentAuthEnabled } from "@/lib/development-auth";
 
 export async function POST(request: NextRequest) {
   const host = request.nextUrl.hostname;
   const origin = request.headers.get("origin");
   if (
-    process.env.AUTH_MODE !== "development" ||
-    !process.env.DEV_AUTH_TOKEN ||
+    !developmentAuthEnabled() ||
     !["localhost", "127.0.0.1", "[::1]"].includes(host) ||
     !origin ||
     new URL(origin).host !== request.headers.get("host")
@@ -16,7 +16,7 @@ export async function POST(request: NextRequest) {
     );
   }
   const response = NextResponse.json({ ok: true });
-  response.cookies.set("ce_dev_session", process.env.DEV_AUTH_TOKEN, {
+  response.cookies.set("ce_dev_session", process.env.DEV_AUTH_TOKEN!, {
     httpOnly: true,
     sameSite: "strict",
     secure: request.nextUrl.protocol === "https:",

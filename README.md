@@ -10,6 +10,7 @@ Legal process project workspace. Step 2 core application of a four-stage applica
 
 Prerequisites: Docker Desktop running with Linux containers, Python 3.11, Node 22.13+ (22.23.5 recommended), npm and Git. Repository scripts also use a project-local Node 22.23.5 runtime, avoiding the host's older 22.12.0 runtime for builds/tests.
 
+
 Run in PowerShell from `D:\ClientExplain-Ai`:
 
 ```powershell

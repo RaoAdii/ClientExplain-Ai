@@ -209,6 +209,20 @@ Fresh RED→GREEN and regression evidence:
 
 This local regression fix does not change the Step 2.2 acceptance decision: the fresh hosted confirmation callback remains BLOCKED by `over_email_send_rate_limit`.
 
+### Supabase email quota and SMTP investigation — 2026-11-24
+
+No signup, resend, recovery or confirmation request was issued during this investigation.
+
+- The hosted public Auth settings endpoint is reachable. Email authentication is enabled, signups are enabled, and `mailer_autoconfirm` is false, so email ownership confirmation remains required.
+- The public settings response does not expose the SMTP provider, `rate_limit_email_sent`, remaining quota, or Auth logs.
+- The repository's approved application environment files contain no SMTP/mailer-provider variables. A Supabase Management API access token/project reference and local Supabase CLI are not available, so hosted `smtp_*` settings, configured rate limits and Auth logs could not be queried programmatically.
+- The last real attempt was recorded around 15:16 IST and returned HTTP 429 `over_email_send_rate_limit`; no `Retry-After` header was retained. By the final check at 16:47 IST, roughly 91 minutes had elapsed, which exceeds the documented one-hour window. Elapsed time does not prove that the shared project quota is currently unused or that the inferred built-in-provider configuration is correct.
+- Current official Supabase documentation states that the built-in provider is best-effort, limited to authorized organization addresses and **2 Auth emails per hour per project**. The observed configuration and exact error are consistent with that provider, but the provider classification remains an inference until Dashboard or Management API inspection confirms it.
+- Supabase documents no non-sending endpoint for remaining email quota. The Management API reads configured limits, not current bucket balance. Quota recovery therefore cannot be proven without a real email-sending action, and the single permitted fresh registration was not consumed as a probe.
+- A custom SMTP preparation and safe inspection guide was added at `docs/supabase-auth-email-delivery.md`. It preserves confirmation, keeps SMTP credentials out of application/browser configuration, and requires approval before any live PATCH or paid email.
+
+**Decision:** Step 2.2 remains **BLOCKED**. The documented recovery window has elapsed, but delivery availability is not observable without either Dashboard/Management evidence or consuming the one permitted email attempt. Confirm the provider/limit in the Dashboard, or obtain approval to configure custom SMTP. Once delivery availability is established, perform exactly one fresh disposable registration and complete callback/session/reload/logout verification.
+
 ## Isolated E2E stabilization
 
 The isolated browser environment uses database `clientexplain_e2e`, API host port `8001`, Redis database `15`, development authentication, local private E2E storage and disabled external AI processing. Configuration uses the existing variable names `APP_ENV`, `AUTH_MODE`, `NEXT_PUBLIC_AUTH_MODE`, `DEV_AUTH_TOKEN`, `API_INTERNAL_URL`, `DATABASE_URL`, `REDIS_URL`, `STORAGE_BACKEND`, `PRIVATE_STORAGE_ROOT`, and `AI_EXTERNAL_PROCESSING_ALLOWED`; no values or complete connection strings are recorded here.

@@ -14,6 +14,19 @@ const projectId = "11111111-1111-4111-8111-111111111111";
 const resourceId = "22222222-2222-4222-8222-222222222222";
 const handlers = { DELETE, GET, PATCH, POST };
 
+test.each(["production", "development"])("requires an explicitly local environment for cookie authentication (%s)", async (nodeEnv) => {
+  vi.stubEnv("NODE_ENV", nodeEnv);
+  vi.stubEnv("APP_ENV", "production");
+  vi.stubEnv("AUTH_MODE", "development");
+  vi.stubEnv("NEXT_PUBLIC_AUTH_MODE", "development");
+  vi.stubEnv("DEV_AUTH_TOKEN", "local-test-credential-at-least-32-characters");
+  vi.stubGlobal("fetch", async () => new Response('{}'));
+  const response = await GET(new NextRequest("http://localhost:3000/api/backend/auth/me", {
+    headers: { cookie: "ce_dev_session=local-test-credential-at-least-32-characters" },
+  }), { params: Promise.resolve({ path: ["auth", "me"] }) });
+  expect(response.status).toBe(401);
+});
+
 function request(body: BodyInit, headers: Record<string, string> = {}) {
   return new NextRequest("http://localhost:3000/api/backend/" + path.join("/"), {
     method: "POST", body, duplex: "half",
@@ -23,6 +36,8 @@ function request(body: BodyInit, headers: Record<string, string> = {}) {
 }
 
 const frontendBackendCalls = [
+  { name: "load saved workflow", method: "GET", route: `projects/${projectId}/workflow`, status: 200 },
+  { name: "save workflow", method: "PATCH", route: `projects/${projectId}/workflow`, status: 200, body: '{"version":0,"stages":[],"edges":[]}' },
   { name: "load workspace session", method: "GET", route: "auth/me", status: 200 },
   { name: "list projects with filters", method: "GET", route: "projects?limit=12&offset=12&search=Civil", status: 200 },
   { name: "create project", method: "POST", route: "projects", status: 201, body: '{"name":"Civil claim"}' },

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { developmentAuthEnabled } from "@/lib/development-auth";
 
 async function proxy(
   request: NextRequest,
@@ -20,6 +21,7 @@ async function proxy(
     path.length === 3 && path[0] === "projects" && isUuid(path[1]) &&
     ((path[2] === "documents" && ["GET", "POST"].includes(method)) ||
       (["activity", "stages", "citations"].includes(path[2]) && method === "GET") ||
+      (path[2] === "workflow" && ["GET", "PATCH"].includes(method)) ||
       (path[2] === "analyze" && method === "POST"));
   const workspaceSession =
     path.length === 2 && path[0] === "auth" && path[1] === "me" && method === "GET";
@@ -50,7 +52,7 @@ async function proxy(
     }
   }
   let authorization = request.headers.get("authorization");
-  if (!authorization && process.env.AUTH_MODE === "development") {
+  if (!authorization && developmentAuthEnabled()) {
     const cookie = request.cookies.get("ce_dev_session")?.value;
     if (cookie && cookie === process.env.DEV_AUTH_TOKEN)
       authorization = `Bearer ${cookie}`;

@@ -1565,6 +1565,16 @@ input[aria-invalid="true"] {
 .citation { border-left: 3px solid var(--accent); padding: 12px 16px; margin-top: 16px; background: var(--background); overflow-wrap: anywhere; }
 .citation blockquote { margin: 12px 0; }
 .process-results, .review-notice { overflow-wrap: anywhere; }
+.workflow-editor { min-width: 0; overflow-wrap: anywhere; }
+.editor-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 12px 0; }
+.workflow-canvas { height: 440px; width: 100%; border: 1px solid var(--border); background: #f8faf9; margin: 16px 0; }
+.editor-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 24px; }
+.editor-details { min-width: 0; border: 1px solid var(--border); padding: 16px; }
+.editor-columns label { display: block; margin: 12px 0; }
+.editor-columns input, .editor-columns textarea, .editor-columns select { display: block; width: 100%; max-width: 100%; padding: 8px; border: 1px solid var(--border); border-radius: 4px; }
+.editor-columns textarea { min-height: 90px; }
+.editor-columns .button { white-space: normal; text-align: left; max-width: 100%; }
+@media (max-width: 768px) { .editor-columns { grid-template-columns: minmax(0, 1fr); } .workflow-canvas { height: 320px; } }
 .process-results .project-details { display: flex; flex-wrap: wrap; gap: 16px 32px; }
 .process-results .project-details dd { margin-left: 0; }
 .review-notice { padding: 16px; border: 1px solid var(--border); background: var(--background); }

@@ -2,6 +2,7 @@ from uuid import UUID
 
 from app.core.auth import Principal, get_principal, tenant_session
 from app.schemas.analysis import AnalysisRequest
+from app.schemas.editor import WorkflowRead, WorkflowWrite
 from app.schemas.jobs import JobRead
 from app.schemas.workflow import (
     CitationRead,
@@ -10,6 +11,7 @@ from app.schemas.workflow import (
     StageRead,
     ValidationErrorRead,
 )
+from app.services.editor import read_workflow, save_workflow
 from app.services.jobs import get_job
 from app.services.workflow import get_stage, list_citations, list_stages, submit_analysis
 from fastapi import APIRouter, Depends, Header, Response
@@ -23,6 +25,25 @@ router = APIRouter(
         422: {"model": ValidationErrorRead},
     },
 )
+
+
+@router.get("/projects/{project_id}/workflow", response_model=WorkflowRead)
+def workflow(
+    project_id: UUID,
+    principal: Principal = Depends(get_principal),
+    db: Session = Depends(tenant_session, scope="function"),
+):
+    return read_workflow(db, principal, project_id)
+
+
+@router.patch("/projects/{project_id}/workflow", response_model=WorkflowRead)
+def edit_workflow(
+    project_id: UUID,
+    data: WorkflowWrite,
+    principal: Principal = Depends(get_principal),
+    db: Session = Depends(tenant_session, scope="function"),
+):
+    return save_workflow(db, principal, project_id, data)
 
 
 @router.post(
