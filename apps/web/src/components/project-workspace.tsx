@@ -51,7 +51,7 @@ function WorkspaceSections({ project }: { project: Project }) {
   const selectionReady = documents.isSuccess && selected.every((selectedId) => documents.data.some((document) => document.id === selectedId && document.status === "completed"));
   return <div className="project-workspace">
     <section aria-labelledby="workflow-editor-title"><h2 id="workflow-editor-title">Visual workflow</h2><Card>
-      {editorOpen ? <WorkflowEditor projectId={id} canEdit={canEdit} onSaved={() => void refresh()} /> : <><p>Build or edit a saved workflow. Manual editing works without an AI provider.</p><Button onClick={() => setEditorOpen(true)}>Open workflow editor</Button></>}
+      {editorOpen ? <WorkflowEditor projectId={id} projectName={project.name} canEdit={canEdit} onSaved={() => void refresh()} /> : <><p>Build or edit a saved workflow. Manual editing works without an AI provider.</p><Button onClick={() => setEditorOpen(true)}>Open workflow editor</Button></>}
     </Card></section>
     <nav className="workspace-sections" aria-label="Project sections"><a href="#documents">Documents</a><a href="#analysis">Analysis</a><a href="#results">Stages and citations</a></nav>
     <section id="documents" aria-labelledby="documents-title"><h2 id="documents-title">Documents</h2><Card>

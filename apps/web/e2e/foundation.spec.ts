@@ -167,14 +167,9 @@ test("real project, document processing, unavailable analysis, persistence and d
   await page.getByLabel("Select brief.txt", { exact: true }).check();
   await expect(page.getByRole("button", { name: "Analyze process", exact: true })).toBeDisabled();
   await page.getByLabel("I authorize external processing of the selected documents.", { exact: true }).check();
-  const providerResponse = page.waitForResponse((response) => response.url().endsWith("/analyze") && response.request().method() === "POST");
-  await page.getByRole("button", { name: "Analyze process", exact: true }).click();
-  expect((await providerResponse).status()).toBe(503);
-  await expect(page.getByRole("alert").filter({ hasText: /provider|processing|configured|disabled/i })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Analyze process", exact: true })).toBeDisabled();
+  await expect(page.getByRole("alert").filter({ hasText: "AI analysis is not configured." })).toBeVisible();
   await expect(page.getByLabel("Process text", { exact: true })).toHaveValue("Explain the filing and review process for a civil claim.");
-  // The browser reports this deliberately exercised HTTP 503; all other console errors fail.
-  const expectedProviderError = errors.findIndex((error) => /503/.test(error));
-  if (expectedProviderError >= 0) errors.splice(expectedProviderError, 1);
   for (const width of [320, 375, 768, 1024, 1440]) {
     await page.setViewportSize({ width, height: 900 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), `Project overflow at ${width}px`).toBe(true);
@@ -190,6 +185,11 @@ test("real project, document processing, unavailable analysis, persistence and d
   await page.getByRole("button", { name: "Delete brief.txt", exact: true }).click();
   await page.getByRole("button", { name: "Confirm document deletion", exact: true }).click();
   await expect(page.getByLabel("Select brief.txt", { exact: true })).toHaveCount(0);
+  for (const file of files.slice(1)) {
+    await page.getByRole("button", { name: `Delete ${file.name}`, exact: true }).click();
+    await page.getByRole("button", { name: "Confirm document deletion", exact: true }).click();
+    await expect(page.getByLabel(`Select ${file.name}`, { exact: true })).toHaveCount(0);
+  }
   await page.getByRole("button", { name: "Edit details" }).click();
   await page
     .getByLabel("Project name", { exact: true })

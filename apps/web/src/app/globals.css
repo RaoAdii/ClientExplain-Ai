@@ -1568,6 +1568,10 @@ input[aria-invalid="true"] {
 .workflow-editor { min-width: 0; overflow-wrap: anywhere; }
 .editor-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 12px 0; }
 .workflow-canvas { height: 440px; width: 100%; border: 1px solid var(--border); background: #f8faf9; margin: 16px 0; }
+.workflow-exports { border-top: 1px solid var(--border); margin-top: 24px; padding-top: 20px; }
+.workflow-exports figure { margin: 16px 0; padding: 12px; border: 1px solid var(--border); background: var(--surface); }
+.workflow-exports figcaption { margin-bottom: 10px; font-size: 13px; font-weight: 600; }
+.workflow-exports img { display: block; width: 100%; max-height: 360px; object-fit: contain; }
 .editor-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 24px; }
 .editor-details { min-width: 0; border: 1px solid var(--border); padding: 16px; }
 .editor-columns label { display: block; margin: 12px 0; }

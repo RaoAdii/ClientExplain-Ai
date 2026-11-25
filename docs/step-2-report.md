@@ -2,6 +2,8 @@
 
 Verification dates: 2026-11-23 through 2026-11-24. Scope is the Step 2 core application. Step 3 has not started and is not authorized. Only non-confidential generated fixtures and controlled provider transports are used. No live OpenAI generation or complete hosted Supabase application-auth verification is claimed.
 
+This report preserves the historical evidence above. A dated local-implementation addendum is appended below; it does not change the external acceptance status.
+
 ## Final status
 
 **BLOCKED** — all locally reproducible Step 2 code, migration, isolated Docker, real-worker ingestion and desktop/mobile Playwright checks pass. Final external acceptance remains blocked on live hosted Supabase Auth/Storage verification and approved live OpenAI processing credentials. These external checks were not simulated or marked as passing.
@@ -347,3 +349,11 @@ docker compose --profile app ps
 ```
 
 Do not point integration or migration audits at production. Do not remove Docker volumes to repeat checks; `down` preserves data and `down -v` deletes it.
+
+## Follow-up local implementation evidence — 2026-11-26
+
+The local application now includes an Ollama analysis/embedding adapter, `GET /api/v1/ai/status` with UI gating when the selected provider is unavailable, validated `PATCH /api/v1/auth/me` profile editing, failed-document retry, and an editable React Flow workflow editor with persistence and conflict handling. Migration readiness now expects `f4a8d1c7e902`, including the review-stage foreign-key correction. These additions do not claim live model output or hosted account verification.
+
+Fresh evidence: 42 focused API/pipeline/workflow tests passed; 112 frontend unit tests passed; the desktop/mobile Playwright suite passed 12/12. After tightening E2E document cleanup, the focused document lifecycle passed on both desktop and mobile. The E2E database ended with 10 projects, 1 document and 1 job, with its recorded project/document counts preserved; the dedicated local-storage test directory contained no remaining files. The final browser run used local storage and disabled external AI; actual Ollama inference remains unverified.
+
+During an initial E2E setup, inherited environment settings caused five generated test files to be uploaded to the configured private Supabase bucket. The user authorized cleanup; exact test-object keys were deleted, the four corresponding isolated test projects were removed, and no hosted settings or policies were changed. Subsequent acceptance used explicit local-storage settings.

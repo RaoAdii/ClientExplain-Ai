@@ -2,8 +2,11 @@
 
 > Legal process project workspace. Foundation release.
 
-Available: create, view, edit and delete legal process projects.
-Planned: document processing, source-backed analysis, generated illustrations, editable workflows, lawyer approval, version history, PDF and PNG exports.
+Available: create, view, edit and delete legal process projects; edit a profile; upload private PDF, DOCX and TXT documents for asynchronous parsing; retry failed parsing; inspect document status and page count; edit, save and reopen process workflows; and download a PDF workflow report or locally generated PNG diagram from saved stage and connection data.
+
+OpenAI and local Ollama analysis adapters are implemented. Analysis is blocked until an available provider is configured; real Ollama inference and hosted Supabase Auth/Storage acceptance are not verified. No legal output is guaranteed accurate.
+
+Planned or incomplete: stage-specific illustrations, a substantive lawyer-review history, and version-history UI. The workflow review-status field alone does not demonstrate professional approval. PDF export currently supports printable Latin-1 text.
 
 All AI-generated legal explanations require professional review and are not verified legal advice. Use non-confidential test information in this evaluation release.
 

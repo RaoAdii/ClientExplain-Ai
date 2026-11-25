@@ -1,6 +1,9 @@
 import { test, expect } from "@playwright/test";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 
 test("manual workflow edits, dependencies, React Flow interactions, undo/redo, conflict and layout survive reload", async ({ page, isMobile }) => {
+  test.setTimeout(120000);
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   page.on("console", (message) => {
@@ -9,13 +12,24 @@ test("manual workflow edits, dependencies, React Flow interactions, undo/redo, c
   await page.goto("/login");
   await page.getByRole("button", { name: "Open local workspace" }).click();
   await expect(page).toHaveURL(/dashboard/);
-  const project = await page.evaluate(async () => {
-    const response = await fetch("/api/backend/projects", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "Manual workflow acceptance" }) });
+  const projectName = `Manual workflow acceptance ${Date.now()}`;
+  const project = await page.evaluate(async (name) => {
+    const response = await fetch("/api/backend/projects", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
     if (!response.ok) throw new Error("Project creation failed");
     return response.json() as Promise<{ id: string }>;
-  });
+  }, projectName);
   try {
     await page.goto(`/dashboard/projects/${project.id}`);
+    const sampleName = "demo-fictitious-community-venue-process.txt";
+    await page.getByLabel("Document file", { exact: true }).setInputFiles({
+      name: sampleName,
+      mimeType: "text/plain",
+      buffer: await readFile(
+        resolve(process.cwd(), "../..", "samples", sampleName),
+      ),
+    });
+    await page.getByRole("button", { name: "Upload document", exact: true }).click();
+    await expect(page.getByLabel(`Select ${sampleName}`, { exact: true })).toBeEnabled({ timeout: 45000 });
     await page.getByRole("button", { name: "Open workflow editor" }).click();
 
     // Add two stages and edit titles/explanations
@@ -46,6 +60,31 @@ test("manual workflow edits, dependencies, React Flow interactions, undo/redo, c
     // Save workflow
     await page.getByRole("button", { name: "Save workflow", exact: true }).click();
     await expect(page.getByText("Workflow saved.", { exact: true })).toBeVisible();
+    await expect(page.getByRole("img", { name: `Generated workflow diagram for ${projectName}` })).toBeVisible();
+
+    const pngDownloadPromise = page.waitForEvent("download");
+    await page.getByRole("button", { name: "Download workflow PNG", exact: true }).click();
+    const pngDownload = await pngDownloadPromise;
+    const pngPath = await pngDownload.path();
+    if (!pngPath) throw new Error("PNG export did not create a downloadable file.");
+    const pngBytes = await readFile(pngPath);
+    expect(pngBytes.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
+    expect(pngBytes.readUInt32BE(16)).toBeGreaterThan(0);
+    expect(pngBytes.readUInt32BE(20)).toBeGreaterThan(0);
+    expect(pngBytes.byteLength).toBeGreaterThan(1000);
+
+    const pdfDownloadPromise = page.waitForEvent("download");
+    await page.getByRole("button", { name: "Download workflow PDF", exact: true }).click();
+    const pdfDownload = await pdfDownloadPromise;
+    const pdfPath = await pdfDownload.path();
+    if (!pdfPath) throw new Error("PDF export did not create a downloadable file.");
+    const pdfBytes = await readFile(pdfPath);
+    expect(pdfBytes.toString("utf8", 0, 5)).toBe("%PDF-");
+    expect(pdfBytes.byteLength).toBeGreaterThan(500);
+    const pdfText = pdfBytes.toString("latin1");
+    expect(pdfText).toContain("Saved workflow report");
+    expect(pdfText).toContain("Read the supplied document");
+    expect(pdfText).toContain("Discuss questions with counsel");
 
     // React Flow canvas interactions: zoom controls, fit view, node click & drag on desktop
     await page.getByRole("button", { name: "Zoom Out" }).click();
@@ -100,13 +139,22 @@ test("manual workflow edits, dependencies, React Flow interactions, undo/redo, c
       });
     }, project.id);
     await page.getByRole("button", { name: "Add stage", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Download workflow PNG", exact: true })).toBeDisabled();
     await page.getByRole("button", { name: "Save workflow", exact: true }).click();
     await expect(page.getByText("The workflow changed. Reload before saving your changes.")).toBeVisible();
 
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     expect(errors).toEqual([]);
   } finally {
-    const response = await page.request.delete(`/api/backend/projects/${project.id}`, { headers: { origin: new URL(page.url()).origin } });
+    const origin = new URL(page.url()).origin;
+    const documentsResponse = await page.request.get(`/api/backend/projects/${project.id}/documents`, { headers: { origin } });
+    expect(documentsResponse.status()).toBe(200);
+    const documents = await documentsResponse.json() as { id: string }[];
+    for (const document of documents) {
+      const deleted = await page.request.delete(`/api/backend/documents/${document.id}`, { headers: { origin } });
+      expect(deleted.status()).toBe(204);
+    }
+    const response = await page.request.delete(`/api/backend/projects/${project.id}`, { headers: { origin } });
     expect(response.status()).toBe(204);
   }
 });

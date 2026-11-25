@@ -149,11 +149,12 @@ export default function Home() {
             </article>
             <article className="feature-card">
               <GitBranch />
-              <span className="small-tag">Planned</span>
-              <h3>Build a visual explanation</h3>
+              <span className="small-tag available">Available now</span>
+              <h3>Edit and export a workflow</h3>
               <p>
-                Document analysis, source-backed stages, editable workflows, and
-                stage illustrations are planned for future releases.
+                Upload documents, build a manual workflow, and download a PDF
+                report or a locally generated diagram. Automated analysis stays
+                provider-gated; stage-specific illustrations are not available.
               </p>
             </article>
             <article className="feature-card">
@@ -161,8 +162,8 @@ export default function Home() {
               <span className="small-tag">Planned</span>
               <h3>Review before you share</h3>
               <p>
-                Lawyer approval, version history, and PDF or PNG exports will
-                support a deliberate review process.
+                A substantive lawyer-review history and version-history screen
+                are planned for a future release.
               </p>
             </article>
           </div>

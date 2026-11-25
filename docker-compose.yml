@@ -32,6 +32,11 @@ services:
       DATABASE_URL: postgresql+psycopg://clientexplain:${POSTGRES_PASSWORD}@postgres:5432/clientexplain
       REDIS_URL: redis://redis:6379/0
       PRIVATE_STORAGE_ROOT: /var/lib/clientexplain/private-storage
+      APP_ENV: ${APP_ENV:-development}
+      AUTH_MODE: ${AUTH_MODE:-development}
+      STORAGE_BACKEND: ${STORAGE_BACKEND:-local}
+      AI_EXTERNAL_PROCESSING_ALLOWED: ${AI_EXTERNAL_PROCESSING_ALLOWED:-false}
+      AI_PROVIDER: ${AI_PROVIDER:-openai}
     volumes: ["private_storage:/var/lib/clientexplain"]
     ports: ["127.0.0.1:8000:8000"]
     depends_on:
@@ -52,6 +57,11 @@ services:
       DATABASE_URL: postgresql+psycopg://clientexplain:${POSTGRES_PASSWORD}@postgres:5432/clientexplain
       REDIS_URL: redis://redis:6379/0
       PRIVATE_STORAGE_ROOT: /var/lib/clientexplain/private-storage
+      APP_ENV: ${APP_ENV:-development}
+      AUTH_MODE: ${AUTH_MODE:-development}
+      STORAGE_BACKEND: ${STORAGE_BACKEND:-local}
+      AI_EXTERNAL_PROCESSING_ALLOWED: ${AI_EXTERNAL_PROCESSING_ALLOWED:-false}
+      AI_PROVIDER: ${AI_PROVIDER:-openai}
     volumes: ["private_storage:/var/lib/clientexplain"]
     depends_on:
       job-watchdog: {condition: service_started}

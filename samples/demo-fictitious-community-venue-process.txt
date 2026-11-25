@@ -1,0 +1,27 @@
+CLIENTEXPLAIN AI — SYNTHETIC DEMO DOCUMENT
+
+Fictional Community Venue Request Process
+
+This text is invented solely for software demonstration and testing. It does
+not describe a real agreement, organization, venue, legal process, rule, or
+deadline. It is not legal advice.
+
+Overview
+
+A participant may send a request to use a fictional community room. A
+coordinator records the request and sends an acknowledgement. The coordinator
+checks the requested date, estimated attendance, and contact details.
+
+If information is missing, the coordinator asks the participant to provide or
+correct it. Once the request record is complete, the coordinator sends either
+a fictional confirmation or a note that the request cannot be accommodated.
+
+Illustrative hand-off
+
+1. Participant submits a request form.
+2. Coordinator acknowledges receipt and checks the supplied details.
+3. Participant responds to any clarification request.
+4. Coordinator sends a final fictional response.
+
+No real person or organization is represented. The steps above are examples
+for exercising document upload, manual workflow editing, and local export only.

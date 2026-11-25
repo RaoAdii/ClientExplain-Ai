@@ -96,6 +96,8 @@
 - [ ] Implement the smallest typed API/UI changes and migration, if required.
 - [ ] Verify cross-tenant denial, cascades, background-job cancellation, and exact storage cleanup.
 
+**Local implementation update (2026-11-26):** Profile display-name updates and failed-document retry are implemented and covered by focused API/frontend tests. Account deletion, archive/duplicate semantics, and project-level storage cleanup remain open; the latter was observed to leave local objects unless documents are individually deleted.
+
 ### Task 5: Build the editable visual workflow
 
 **Files:**
@@ -108,6 +110,8 @@
 - [ ] Write and approve a workflow-editor design covering desktop, 320–768px layouts, keyboard behavior, large graphs, and persistence conflicts.
 - [ ] Implement RED→GREEN API and component tests for stage edits, edges, positions, save/restore, authorization, and concurrency.
 - [ ] Add focused Playwright coverage for editing, reopening, mobile adaptation, and keyboard access.
+
+**Local implementation update (2026-11-26):** The React Flow editor now supports stage details, connections, ordering, undo/redo, save/reload and conflict handling. Desktop/mobile browser acceptance passes, but the complete design, large-graph behavior, keyboard audit and full authorization/concurrency matrix remain unverified; keep this task open.
 
 ### Task 6: Implement real image generation through the worker
 

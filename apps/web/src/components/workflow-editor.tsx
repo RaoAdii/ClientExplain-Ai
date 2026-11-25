@@ -5,8 +5,9 @@ import "@xyflow/react/dist/style.css";
 import { api } from "@/services/api";
 import type { EditorStage, WorkflowGraph } from "@/types/workflow";
 import { Button } from "./ui/button";
+import { WorkflowExports } from "./workflow-exports";
 
-export function WorkflowEditor({ projectId, canEdit, onSaved }: { projectId: string; canEdit: boolean; onSaved: () => void }) {
+export function WorkflowEditor({ projectId, projectName = "Workflow", canEdit, onSaved }: { projectId: string; projectName?: string; canEdit: boolean; onSaved: () => void }) {
   const fieldId = useId();
   const [graph, setGraph] = useState<WorkflowGraph>();
   const [baseline, setBaseline] = useState("");
@@ -119,6 +120,7 @@ export function WorkflowEditor({ projectId, canEdit, onSaved }: { projectId: str
           <Background /><Controls showInteractive={false} />
         </ReactFlow>
       </div>
+      <WorkflowExports graph={graph} projectName={projectName} saved={!dirty && !saving && graph.version > 0} />
       <div className="editor-columns">
         <div><h3>Stages</h3>{!graph.stages.length && <p>Add a stage to build a workflow from your own information without an AI provider.</p>}
           <ol>{graph.stages.map((item, index) => <li key={item.id}><Button variant="ghost" onClick={() => setSelected(item.id)} aria-pressed={selected === item.id}>{index + 1}. {item.title}</Button></li>)}</ol>
