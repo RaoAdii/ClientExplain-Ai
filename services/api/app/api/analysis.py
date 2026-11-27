@@ -36,7 +36,7 @@ def ai_status(principal: Principal = Depends(get_principal)):
         return ollama_status(settings)
     configured = provider_is_configured(settings)
     return {
-        "provider": "openai",
+        "provider": settings.ai_provider,
         "available": configured,
         "reason": "configured" if configured else "not_configured",
     }

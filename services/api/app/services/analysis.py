@@ -11,7 +11,7 @@ from sqlalchemy import select
 
 @dataclass(frozen=True)
 class AnalysisProviders:
-    embedding: EmbeddingProvider
+    embedding: EmbeddingProvider | None
     analysis: LegalAnalysisProvider
     worker_task_id: str
 

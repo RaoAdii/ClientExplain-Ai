@@ -30,6 +30,50 @@
             "HTTPBearer": []
           }
         ]
+      },
+      "patch": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Update Me",
+        "operationId": "update_me_api_v1_auth_me_patch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfileUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/api/v1/projects": {
@@ -764,6 +808,302 @@
               }
             },
             "description": "Service Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/documents/{document_id}/retry": {
+      "post": {
+        "tags": [
+          "Documents"
+        ],
+        "summary": "Retry",
+        "operationId": "retry_api_v1_documents__document_id__retry_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Document Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadRead"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorRead"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorRead"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationErrorRead"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorRead"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorRead"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorRead"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/ai/status": {
+      "get": {
+        "tags": [
+          "Analysis"
+        ],
+        "summary": "Ai Status",
+        "operationId": "ai_status_api_v1_ai_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorRead"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationErrorRead"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/workflow": {
+      "get": {
+        "tags": [
+          "Analysis"
+        ],
+        "summary": "Workflow",
+        "operationId": "workflow_api_v1_projects__project_id__workflow_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowRead"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorRead"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorRead"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationErrorRead"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Analysis"
+        ],
+        "summary": "Edit Workflow",
+        "operationId": "edit_workflow_api_v1_projects__project_id__workflow_patch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowWrite"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowRead"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorRead"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorRead"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationErrorRead"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
           }
         }
       }
@@ -1679,6 +2019,133 @@
         ],
         "title": "DocumentRead"
       },
+      "Edge": {
+        "properties": {
+          "source": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Source"
+          },
+          "target": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Target"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "source",
+          "target"
+        ],
+        "title": "Edge"
+      },
+      "EditorStage": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Title"
+          },
+          "explanation": {
+            "type": "string",
+            "maxLength": 5000,
+            "minLength": 1,
+            "title": "Explanation"
+          },
+          "responsible_party": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 1000,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Responsible Party"
+          },
+          "required_documents": {
+            "items": {
+              "type": "string",
+              "maxLength": 1000,
+              "minLength": 1
+            },
+            "type": "array",
+            "maxItems": 30,
+            "title": "Required Documents"
+          },
+          "limitations": {
+            "items": {
+              "type": "string",
+              "maxLength": 1000,
+              "minLength": 1
+            },
+            "type": "array",
+            "maxItems": 30,
+            "title": "Limitations"
+          },
+          "position": {
+            "$ref": "#/components/schemas/Position"
+          },
+          "actions": {
+            "items": {
+              "type": "string",
+              "maxLength": 1000,
+              "minLength": 1
+            },
+            "type": "array",
+            "maxItems": 30,
+            "title": "Actions"
+          },
+          "preconditions": {
+            "items": {
+              "type": "string",
+              "maxLength": 1000,
+              "minLength": 1
+            },
+            "type": "array",
+            "maxItems": 30,
+            "title": "Preconditions"
+          },
+          "outcomes": {
+            "items": {
+              "type": "string",
+              "maxLength": 1000,
+              "minLength": 1
+            },
+            "type": "array",
+            "maxItems": 30,
+            "title": "Outcomes"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "in_progress",
+              "completed"
+            ],
+            "title": "Status",
+            "default": "pending"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "explanation",
+          "position"
+        ],
+        "title": "EditorStage"
+      },
       "ErrorDetail": {
         "properties": {
           "message": {
@@ -1726,6 +2193,115 @@
         ],
         "title": "ErrorRead"
       },
+      "ExtractedFactRead": {
+        "properties": {
+          "statement": {
+            "type": "string",
+            "title": "Statement"
+          },
+          "evidence_chunk_id": {
+            "type": "string",
+            "title": "Evidence Chunk Id"
+          },
+          "excerpt": {
+            "type": "string",
+            "title": "Excerpt"
+          },
+          "source_filename": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Filename"
+          },
+          "page_number": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page Number"
+          }
+        },
+        "type": "object",
+        "required": [
+          "statement",
+          "evidence_chunk_id",
+          "excerpt"
+        ],
+        "title": "ExtractedFactRead"
+      },
+      "FinancialFactRead": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "deposit",
+              "proposed_deduction"
+            ],
+            "title": "Kind"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "amount": {
+            "type": "string",
+            "title": "Amount"
+          },
+          "currency": {
+            "type": "string",
+            "title": "Currency"
+          },
+          "evidence_chunk_id": {
+            "type": "string",
+            "title": "Evidence Chunk Id"
+          },
+          "excerpt": {
+            "type": "string",
+            "title": "Excerpt"
+          },
+          "source_filename": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Filename"
+          },
+          "page_number": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page Number"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "label",
+          "amount",
+          "currency",
+          "evidence_chunk_id",
+          "excerpt"
+        ],
+        "title": "FinancialFactRead"
+      },
       "FirmRead": {
         "properties": {
           "id": {
@@ -1757,6 +2333,30 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "InformationGapRead": {
+        "properties": {
+          "category": {
+            "type": "string",
+            "enum": [
+              "missing_document",
+              "missing_information",
+              "unverified",
+              "not_applicable"
+            ],
+            "title": "Category"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          }
+        },
+        "type": "object",
+        "required": [
+          "category",
+          "description"
+        ],
+        "title": "InformationGapRead"
       },
       "JobRead": {
         "properties": {
@@ -1881,6 +2481,57 @@
         ],
         "title": "JobRead"
       },
+      "Position": {
+        "properties": {
+          "x": {
+            "type": "number",
+            "maximum": 100000.0,
+            "minimum": -100000.0,
+            "title": "X"
+          },
+          "y": {
+            "type": "number",
+            "maximum": 100000.0,
+            "minimum": -100000.0,
+            "title": "Y"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "x",
+          "y"
+        ],
+        "title": "Position"
+      },
+      "PotentialBalanceRead": {
+        "properties": {
+          "currency": {
+            "type": "string",
+            "title": "Currency"
+          },
+          "deposit_total": {
+            "type": "string",
+            "title": "Deposit Total"
+          },
+          "proposed_deductions_total": {
+            "type": "string",
+            "title": "Proposed Deductions Total"
+          },
+          "potential_balance": {
+            "type": "string",
+            "title": "Potential Balance"
+          }
+        },
+        "type": "object",
+        "required": [
+          "currency",
+          "deposit_total",
+          "proposed_deductions_total",
+          "potential_balance"
+        ],
+        "title": "PotentialBalanceRead"
+      },
       "ProcessRead": {
         "properties": {
           "process_name": {
@@ -1961,6 +2612,63 @@
             ],
             "title": "Complexity"
           },
+          "language": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Language"
+          },
+          "main_objective": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Main Objective"
+          },
+          "parties_involved": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Parties Involved"
+          },
+          "facts": {
+            "items": {
+              "$ref": "#/components/schemas/ExtractedFactRead"
+            },
+            "type": "array",
+            "title": "Facts"
+          },
+          "financial_facts": {
+            "items": {
+              "$ref": "#/components/schemas/FinancialFactRead"
+            },
+            "type": "array",
+            "title": "Financial Facts"
+          },
+          "potential_balances": {
+            "items": {
+              "$ref": "#/components/schemas/PotentialBalanceRead"
+            },
+            "type": "array",
+            "title": "Potential Balances"
+          },
+          "information_gaps": {
+            "items": {
+              "$ref": "#/components/schemas/InformationGapRead"
+            },
+            "type": "array",
+            "title": "Information Gaps"
+          },
           "missing_information": {
             "items": {
               "type": "string"
@@ -2013,6 +2721,22 @@
           "display_name"
         ],
         "title": "ProfileRead"
+      },
+      "ProfileUpdate": {
+        "properties": {
+          "display_name": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Display Name"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "display_name"
+        ],
+        "title": "ProfileUpdate"
       },
       "ProjectCreate": {
         "properties": {
@@ -2426,6 +3150,34 @@
             ],
             "title": "Estimated Duration"
           },
+          "inputs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Inputs"
+          },
+          "actions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Actions"
+          },
+          "expected_outputs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Expected Outputs"
+          },
+          "decision_points": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Decision Points"
+          },
           "source_backed": {
             "type": "boolean",
             "title": "Source Backed"
@@ -2471,6 +3223,10 @@
           "responsible_party",
           "required_documents",
           "estimated_duration",
+          "inputs",
+          "actions",
+          "expected_outputs",
+          "decision_points",
           "source_backed",
           "general_explanation",
           "limitations",
@@ -2586,6 +3342,77 @@
           "error"
         ],
         "title": "ValidationErrorRead"
+      },
+      "WorkflowRead": {
+        "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Version"
+          },
+          "stages": {
+            "items": {
+              "$ref": "#/components/schemas/EditorStage"
+            },
+            "type": "array",
+            "maxItems": 50,
+            "title": "Stages"
+          },
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/Edge"
+            },
+            "type": "array",
+            "maxItems": 200,
+            "title": "Edges"
+          },
+          "review_status": {
+            "type": "string",
+            "title": "Review Status"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "version",
+          "stages",
+          "edges",
+          "review_status"
+        ],
+        "title": "WorkflowRead"
+      },
+      "WorkflowWrite": {
+        "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Version"
+          },
+          "stages": {
+            "items": {
+              "$ref": "#/components/schemas/EditorStage"
+            },
+            "type": "array",
+            "maxItems": 50,
+            "title": "Stages"
+          },
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/Edge"
+            },
+            "type": "array",
+            "maxItems": 200,
+            "title": "Edges"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "version",
+          "stages",
+          "edges"
+        ],
+        "title": "WorkflowWrite"
       }
     },
     "securitySchemes": {

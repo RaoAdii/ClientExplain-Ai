@@ -9,7 +9,10 @@ from uuid import uuid4
 import httpx
 import pytest
 from app.db.session import SessionLocal
-from app.integrations.openai_provider import OpenAIEmbeddingProvider, OpenAILegalAnalysisProvider
+from app.integrations.openai_provider import (
+    OpenAIEmbeddingProvider,
+    OpenAILegalAnalysisProvider,
+)
 from app.models.entities import (
     Document,
     DocumentChunk,
@@ -20,14 +23,21 @@ from app.models.entities import (
     ProjectVersion,
     StageCitation,
 )
-from app.schemas.analysis import AnalysisRequest
+from app.schemas.analysis import AnalysisRequest, LegalProcess
 from app.services.analysis import AnalysisProviders
 from app.services.jobs import create_job, transition_job
 from sqlalchemy import delete, event, func, select, text, update
-from test_analysis_provider import backed_process, process, response_body, sdk_client, settings
+from test_analysis_provider import (
+    backed_process,
+    process,
+    response_body,
+    sdk_client,
+    settings,
+)
 from test_rag import OWNER, VECTOR, document, source
+
 from worker.celery_app import app as celery
-from worker.pipelines.analysis import run_analysis_job
+from worker.pipelines.analysis import run_analysis_job, select_document_evidence
 from worker.tasks import engine as worker_engine
 from worker.tasks import record_failure
 
@@ -103,12 +113,21 @@ def providers(*, callback=None, invalid=False, responses=None, embedding_vectors
         return httpx.Response(200, json=response_body(payload))
 
     client = sdk_client(handler)
-    config = settings()
+    config = settings(ai_provider="openai")
     return AnalysisProviders(
         OpenAIEmbeddingProvider(config, client=client),
         OpenAILegalAnalysisProvider(config, client=client),
         worker_task_id="offline-task",
     ), calls
+
+
+def test_process_text_only_does_not_request_embeddings(project_id):
+    job_id = job_for(project_id)
+    provider, calls = providers()
+
+    run_analysis_job(job_id, provider)
+
+    assert not [path for path, _ in calls if path.endswith("embeddings")]
 
 
 def test_selected_chunks_embed_on_demand_and_publish_atomically_once(project_id):
@@ -150,6 +169,170 @@ def test_selected_chunks_embed_on_demand_and_publish_atomically_once(project_id)
     ]
 
 
+def test_groq_analysis_uses_only_selected_document_passages_without_embeddings(project_id):
+    with SessionLocal.begin() as db:
+        first, first_chunk = document(db, project_id, vector=None)
+        second, second_chunk = document(db, project_id, vector=None)
+        selected_ids = [first.id, second.id]
+
+    class MockGroqProvider:
+        provider_name = "groq"
+
+        def __init__(self):
+            self.received = []
+
+        def analyze(self, request, evidence):
+            self.received = evidence
+            payload = backed_process(evidence[0].chunk_id)
+            payload["stages"][0].update(
+                inputs=["Selected document passage"],
+                actions=["Review the source passage."],
+                expected_outputs=["A reviewed record."],
+            )
+            payload["stages"].append(
+                {
+                    "stage_number": 2,
+                    "title": "Confirm next steps",
+                    "explanation": "Confirm the next step with a qualified professional.",
+                    "responsible_party": "Client",
+                    "required_documents": [],
+                    "estimated_duration": None,
+                    "inputs": ["Reviewed record"],
+                    "actions": ["Confirm any required follow-up."],
+                    "expected_outputs": ["Confirmed next step."],
+                    "decision_points": [],
+                    "evidence_chunk_ids": [],
+                    "claims": [],
+                    "source_backed": False,
+                    "general_explanation": True,
+                    "limitations": [],
+                }
+            )
+            return LegalProcess.model_validate(
+                payload,
+                context={
+                    "jurisdiction": request.jurisdiction,
+                    "language": request.language,
+                    "evidence": {chunk.chunk_id: chunk.content for chunk in evidence},
+                    "require_complete_workflow": True,
+                },
+            )
+
+    groq = MockGroqProvider()
+    job_id = job_for(project_id, selected_ids)
+    run_analysis_job(job_id, AnalysisProviders(None, groq, "offline-task"))
+
+    assert {chunk.document_id for chunk in groq.received} == set(selected_ids)
+    assert {chunk.chunk_id for chunk in groq.received} == {
+        str(first_chunk.id),
+        str(second_chunk.id),
+    }
+    assert all(chunk.source_filename == "brief.txt" for chunk in groq.received)
+    with SessionLocal() as db:
+        assert db.get(GenerationJob, job_id).status == "completed"
+        assert db.scalar(select(DocumentChunk.embedding).where(DocumentChunk.id == first_chunk.id)) is None
+        assert db.scalar(select(DocumentChunk.embedding).where(DocumentChunk.id == second_chunk.id)) is None
+        stages = db.scalars(
+            select(ProcessStage).where(ProcessStage.project_id == project_id).order_by(ProcessStage.position)
+        ).all()
+        assert len(stages) == 2
+        assert stages[0].actions == ["Review the source passage."]
+        assert stages[1].expected_outputs == ["Confirmed next step."]
+
+
+def test_document_evidence_keeps_relevant_passages_for_all_selected_documents_within_budget():
+    documents = [
+        Document(id=uuid4(), filename=f"document-{index}.txt")
+        for index in range(20)
+    ]
+    chunks = [
+        DocumentChunk(
+            id=uuid4(),
+            document_id=document.id,
+            position=0,
+            content=f"{'x' * 6000} refund deadline {'y' * 5983}",
+            source_filename=document.filename,
+        )
+        for document in documents
+    ]
+    request = AnalysisRequest(
+        process_text="Check the refund deadline.",
+        jurisdiction="India",
+        selected_document_ids=[document.id for document in documents],
+    )
+
+    evidence, omitted = select_document_evidence(request, documents, chunks)
+
+    assert len(evidence) == len(documents)
+    assert sum(len(chunk.content) for chunk in evidence) <= 200_000
+    assert all("refund deadline" in chunk.content for chunk in evidence)
+    assert omitted == len(documents)
+
+
+def test_publication_stores_evidence_facts_and_server_calculates_balances(project_id):
+    with SessionLocal.begin() as db:
+        selected, chunk = document(db, project_id, vector=None)
+        chunk.content = (
+            "The refundable deposit was INR 45000. "
+            "Proposed cleaning deduction: INR 5000."
+        )
+        selected_id, chunk_id = selected.id, chunk.id
+    job_id = job_for(project_id, [selected_id])
+
+    def financial_response(request, body):
+        packet = json.loads(body["input"][1]["content"])
+        evidence = packet["evidence"][0]
+        payload = backed_process(evidence["chunk_id"], "The refundable deposit was INR 45000")
+        payload["facts"] = [
+            {
+                "statement": "The agreement records a refundable deposit.",
+                "evidence_chunk_id": evidence["chunk_id"],
+                "excerpt": "The refundable deposit was INR 45000",
+            }
+        ]
+        payload["financial_facts"] = [
+            {
+                "kind": "deposit",
+                "label": "Refundable deposit",
+                "amount": "45000.00",
+                "currency": "INR",
+                "evidence_chunk_id": evidence["chunk_id"],
+                "excerpt": "The refundable deposit was INR 45000",
+            },
+            {
+                "kind": "proposed_deduction",
+                "label": "Cleaning",
+                "amount": "5000.00",
+                "currency": "INR",
+                "evidence_chunk_id": evidence["chunk_id"],
+                "excerpt": "Proposed cleaning deduction: INR 5000",
+            },
+        ]
+        payload["stages"][0]["inputs"] = ["Agreement"]
+        payload["stages"][0]["actions"] = ["Review the evidence."]
+        payload["stages"][0]["expected_outputs"] = ["Reviewed agreement."]
+        return httpx.Response(200, json=response_body(payload))
+
+    provider, _ = providers(responses=financial_response)
+    run_analysis_job(job_id, provider)
+
+    with SessionLocal() as db:
+        version = db.scalar(select(ProjectVersion).where(ProjectVersion.generation_job_id == job_id))
+        assert version.snapshot["facts"][0]["source_filename"] == "brief.txt"
+        assert version.snapshot["financial_facts"][1]["page_number"] == 1
+        assert version.snapshot["potential_balances"] == [
+            {
+                "currency": "INR",
+                "deposit_total": "45000.00",
+                "proposed_deductions_total": "5000.00",
+                "potential_balance": "40000.00",
+            }
+        ]
+        stage = db.scalar(select(ProcessStage).where(ProcessStage.project_id == project_id))
+        assert stage.inputs == ["Agreement"]
+        assert db.get(DocumentChunk, chunk_id).content.startswith("The refundable deposit")
+
+
 def test_no_selected_documents_produces_unverified_general_results(project_id):
     with SessionLocal.begin() as db:
         document(db, project_id, vector=None)
@@ -176,7 +359,10 @@ def test_no_selected_documents_produces_unverified_general_results(project_id):
 @pytest.mark.parametrize("length", [12000, 12001, 20000])
 def test_analysis_accepts_long_requests_with_bounded_query_embeddings(project_id, length):
     text = "a" * 12000 + "b" * (length - 12000)
-    job_id = job_for(project_id, process_text=text)
+    with SessionLocal.begin() as db:
+        selected, _ = document(db, project_id)
+        selected_id = selected.id
+    job_id = job_for(project_id, [selected_id], process_text=text)
     provider, calls = providers()
     run_analysis_job(job_id, provider)
     with SessionLocal() as db:
@@ -479,7 +665,10 @@ def test_registered_task_retries_only_typed_transient_provider_failures(
     import worker.tasks.analysis as task_module
 
     celery.loader.import_default_modules()
-    job_id = job_for(project_id, claim=False)
+    with SessionLocal.begin() as db:
+        selected, _ = document(db, project_id, vector=None)
+        selected_id = selected.id
+    job_id = job_for(project_id, [selected_id], claim=False)
     calls = []
 
     def handler(request):
@@ -501,7 +690,7 @@ def test_registered_task_retries_only_typed_transient_provider_failures(
             },
         )
 
-    config, client = settings(), sdk_client(handler)
+    config, client = settings(ai_provider="openai"), sdk_client(handler)
     monkeypatch.setattr(
         task_module,
         "get_embedding_provider",

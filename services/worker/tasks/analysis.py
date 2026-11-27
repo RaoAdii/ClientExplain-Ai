@@ -8,7 +8,9 @@ from worker.tasks import run_job
 
 def _analysis_pipeline(task, job_id, document_id):
     providers = AnalysisProviders(
-        get_embedding_provider(settings), get_analysis_provider(settings), task.request.id
+        None if settings.ai_provider == "groq" else get_embedding_provider(settings),
+        get_analysis_provider(settings),
+        task.request.id,
     )
     run_analysis_job(job_id, providers)
 

@@ -12,14 +12,14 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 const project = { id: "p1", name: "Claim", jurisdiction: "England and Wales", description: "", legal_area: "Civil", language: "English", target_audience: "Client", complexity: "standard", workflow_status: "draft", processing_status: "idle", review_status: "requires_review", owner_id: "u1", created_at: "2026-11-18", updated_at: "2026-11-18" };
 const document = { id: "d1", project_id: "p1", filename: "brief.txt", media_type: "text/plain", byte_size: 20, sha256: "abc", status: "completed", created_at: "2026-11-18", updated_at: "2026-11-18" };
 const job = { id: "j1", project_id: "p1", kind: "analysis", status: "queued", progress: 0, current_stage: "queued", retry_count: 0, error_code: null, error_message: null as string | null };
-const stage = { id: "s1", project_id: "p1", position: 1, title: "Prepare claim", explanation: "Review the evidence.", responsible_party: "Lawyer", required_documents: ["Claim form"], estimated_duration: "Varies", source_backed: true, general_explanation: false, limitations: ["Check deadlines"], verification_status: "unverified" };
+const stage = { id: "s1", project_id: "p1", position: 1, title: "Prepare claim", explanation: "Review the evidence.", responsible_party: "Lawyer", required_documents: ["Claim form"], estimated_duration: "Varies", inputs: ["Selected agreement"], actions: ["Review the agreement"], expected_outputs: ["Reviewed application"], decision_points: ["Check jurisdiction"], source_backed: true, general_explanation: false, limitations: ["Check deadlines"], verification_status: "unverified" };
 const citation = { id: "c1", stage_id: "s1", claim_text: "Review evidence", excerpt: "The claim must be reviewed.", source_type: "user_document", verification_status: "unverified", validation_status: "supported", source_filename: "brief.txt", page_number: 3, heading: "Filing", source_url: null };
 function response(data: unknown, status = 200) { return new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } }); }
 let documents = [document];
-let aiProvider: { provider: "openai" | "ollama"; available: boolean; reason: string | null };
+let aiProvider: { provider: "openai" | "ollama" | "groq"; available: boolean; reason: string | null };
 let detail = { ...document, page_count: 1, parsing_error: null as string | null, ocr_required: false };
 let currentJob = { ...job };
-let process = { process_name: null as string | null, summary: null as string | null, stages: [] as typeof stage[], missing_information: [] as string[], limitations: [] as string[], review_required: true };
+let process = { process_name: null as string | null, jurisdiction: null as string | null, legal_area: null as string | null, summary: null as string | null, applicability_date: null as string | null, audience: null as string | null, complexity: null as string | null, language: null as string | null, main_objective: null as string | null, parties_involved: [] as string[], facts: [] as { statement: string; evidence_chunk_id: string; excerpt: string; source_filename: string | null; page_number: number | null }[], financial_facts: [] as { kind: "deposit" | "proposed_deduction"; label: string; amount: string; currency: string; evidence_chunk_id: string; excerpt: string; source_filename: string | null; page_number: number | null }[], potential_balances: [] as { currency: string; deposit_total: string; proposed_deductions_total: string; potential_balance: string }[], information_gaps: [] as { category: "missing_document" | "missing_information" | "unverified" | "not_applicable"; description: string }[], stages: [] as typeof stage[], missing_information: [] as string[], limitations: [] as string[], review_required: true };
 class UploadXHR {
   static latest: UploadXHR;
   upload = { onprogress: null as ((event: ProgressEvent) => void) | null };
@@ -36,7 +36,7 @@ class UploadXHR {
 function mount() { const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } }); const view = render(<QueryClientProvider client={client}><ProjectWorkspace id="p1" /></QueryClientProvider>); return { client, ...view }; }
 async function fillAnalysis() { await userEvent.type(await screen.findByLabelText("Process text"), "Explain filing a civil claim."); }
 beforeEach(() => {
-  session.role = "owner"; sessionStorage.clear(); documents = [document]; aiProvider = { provider: "openai", available: true, reason: "configured" }; detail = { ...document, page_count: 1, parsing_error: null, ocr_required: false }; currentJob = { ...job }; process = { process_name: null, summary: null, stages: [], missing_information: [], limitations: [], review_required: true };
+  session.role = "owner"; sessionStorage.clear(); documents = [document]; aiProvider = { provider: "openai", available: true, reason: "configured" }; detail = { ...document, page_count: 1, parsing_error: null, ocr_required: false }; currentJob = { ...job }; process = { process_name: null, jurisdiction: null, legal_area: null, summary: null, applicability_date: null, audience: null, complexity: null, language: null, main_objective: null, parties_involved: [], facts: [], financial_facts: [], potential_balances: [], information_gaps: [], stages: [], missing_information: [], limitations: [], review_required: true };
   vi.stubGlobal("XMLHttpRequest", UploadXHR);
   vi.stubGlobal("fetch", vi.fn(async (input: string, options?: RequestInit) => {
     if (options?.method === "DELETE") return new Response(null, { status: 204 });
@@ -99,6 +99,16 @@ describe("Document and analysis workspace", () => {
     await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/backend/documents/d1/retry", expect.objectContaining({ method: "POST" })));
     expect(await screen.findByText(/Parse job: Queued/)).toBeVisible();
   });
+  it("selects and deselects all ready documents", async () => {
+    documents = [document, { ...document, id: "d2", filename: "annex.txt" }];
+    mount();
+    await userEvent.click(await screen.findByRole("button", { name: "Select all ready documents" }));
+    expect(screen.getByLabelText("Select brief.txt")).toBeChecked();
+    expect(screen.getByLabelText("Select annex.txt")).toBeChecked();
+    await userEvent.click(screen.getByRole("button", { name: "Deselect all ready documents" }));
+    expect(screen.getByLabelText("Select brief.txt")).not.toBeChecked();
+    expect(screen.getByLabelText("Select annex.txt")).not.toBeChecked();
+  });
   it("confirms document deletion and refreshes invalidated results", async () => {
     mount(); await userEvent.click(await screen.findByRole("button", { name: "Delete brief.txt" }));
     expect(fetch).not.toHaveBeenCalledWith("/api/backend/documents/d1", expect.objectContaining({ method: "DELETE" }));
@@ -124,10 +134,24 @@ describe("Document and analysis workspace", () => {
     await userEvent.click(screen.getByLabelText("Select brief.txt"));
     expect(screen.getByText(/configured local Ollama server/)).toBeVisible();
     expect(screen.queryByLabelText(/authorize external processing/i)).not.toBeInTheDocument();
-    const submit = screen.getByRole("button", { name: "Analyze process" });
+    const submit = screen.getByRole("button", { name: "Analyze process and selected documents" });
     expect(submit).toBeEnabled();
     await userEvent.click(submit);
     await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/backend/projects/p1/analyze", expect.objectContaining({ method: "POST" })));
+  });
+  it("requires consent before sending selected document excerpts to Groq", async () => {
+    aiProvider = { provider: "groq", available: true, reason: null };
+    mount();
+    await fillAnalysis();
+    expect(screen.getByRole("button", { name: "Analyze process" })).toBeEnabled();
+    await userEvent.click(screen.getByLabelText("Select brief.txt"));
+    expect(screen.getByText(/sent to Groq/)).toBeVisible();
+    const submit = screen.getByRole("button", { name: "Analyze process and selected documents" });
+    expect(submit).toBeDisabled();
+    await userEvent.click(screen.getByLabelText(/I authorize external processing/));
+    expect(submit).toBeEnabled();
+    await userEvent.click(submit);
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/backend/projects/p1/analyze", expect.objectContaining({ method: "POST", body: expect.stringContaining('"selected_document_ids":["d1"]') })));
   });
   it("blocks analysis and explains provider configuration when unavailable", async () => {
     aiProvider = { provider: "ollama", available: false, reason: "models_not_installed" };
@@ -149,8 +173,8 @@ describe("Document and analysis workspace", () => {
     expect(screen.getByRole("progressbar", { name: "Analysis job progress" })).toHaveAttribute("value", String(currentJob.progress));
     if (status === "failed") expect(screen.getByText("Provider timed out. Retry analysis.")).toBeVisible();
   });
-  it("renders stored stages in order with review, provenance, excerpt and page details", async () => {
-    process = { process_name: "Civil claim process", summary: "Stored summary only.", stages: [{ ...stage, id: "s2", position: 2, title: "File claim", source_backed: false, general_explanation: true }, stage], missing_information: ["Court not supplied"], limitations: ["Jurisdiction-specific advice needed"], review_required: true };
+  it("renders stored facts, server-calculated balances and complete stage details", async () => {
+    process = { ...process, process_name: "Civil claim process", summary: "Stored summary only.", main_objective: "Resolve the claim", parties_involved: ["Client", "Landlord"], facts: [{ statement: "The agreement records the deposit.", evidence_chunk_id: "chunk-1", excerpt: "Deposit paid", source_filename: "brief.txt", page_number: 1 }], financial_facts: [{ kind: "deposit", label: "Deposit", amount: "45000.00", currency: "INR", evidence_chunk_id: "chunk-1", excerpt: "INR 45000", source_filename: "brief.txt", page_number: 1 }], potential_balances: [{ currency: "INR", deposit_total: "45000.00", proposed_deductions_total: "5000.00", potential_balance: "40000.00" }], information_gaps: [{ category: "missing_document", description: "No payment receipt supplied." }], stages: [{ ...stage, id: "s2", position: 2, title: "File claim", inputs: ["Completed claim"], actions: ["File the claim"], expected_outputs: ["Filed claim record"], decision_points: ["Confirm court acceptance"], source_backed: false, general_explanation: true }, stage], missing_information: ["Court not supplied"], limitations: ["Jurisdiction-specific advice needed"], review_required: true };
     mount(); expect(await screen.findByText("Stored summary only.")).toBeVisible();
     const stages = screen.getByRole("list", { name: "Process stages" });
     expect(within(stages).getAllByRole("heading", { level: 3 }).map((h) => h.textContent)).toEqual(["1. Prepare claim", "2. File claim"]);
@@ -158,6 +182,13 @@ describe("Document and analysis workspace", () => {
     expect(screen.getByText("User document")).toBeVisible(); expect(screen.getAllByText("Unverified").length).toBeGreaterThan(0);
     expect(screen.getByText("The claim must be reviewed.")).toBeVisible(); expect(screen.getByText(/Page 3/)).toBeVisible();
     expect(screen.getByText("Court not supplied")).toBeVisible(); expect(screen.getByText("General explanation")).toBeVisible();
+    expect(screen.getByText("The agreement records the deposit.")).toBeVisible();
+    expect(screen.getAllByText(/Unverified document evidence: brief.txt, page 1/)).toHaveLength(2);
+    expect(screen.getByText(/INR: deposits 45000.00 − proposed deductions 5000.00 = potential balance 40000.00/)).toBeVisible();
+    expect(screen.getByText("Review the agreement")).toBeVisible();
+    expect(screen.getByText("Reviewed application")).toBeVisible();
+    expect(screen.getByText("Filed claim record")).toBeVisible();
+    expect(screen.getByText("Check jurisdiction")).toBeVisible();
   });
   it("hides editing actions from reviewers", async () => {
     session.role = "reviewer"; mount(); await screen.findByText("brief.txt");

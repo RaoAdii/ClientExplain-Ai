@@ -39,10 +39,12 @@ class Settings(BaseSettings):
     max_upload_bytes: int = Field(default=MAX_UPLOAD_BYTES, gt=0, le=MAX_UPLOAD_BYTES)
     openai_api_key: SecretStr = SecretStr("")
     openai_analysis_model: str = ""
+    groq_api_key: SecretStr = SecretStr("")
+    groq_model: str = "openai/gpt-oss-20b"
     embedding_model: str = EMBEDDING_MODEL
     embedding_dimensions: int = EMBEDDING_DIMENSIONS
     ai_external_processing_allowed: bool = False
-    ai_provider: Literal["openai", "ollama"] = "openai"
+    ai_provider: Literal["openai", "ollama", "groq"] = "openai"
     ollama_base_url: str = "http://host.docker.internal:11434"
     ollama_analysis_model: str = ""
     ollama_embedding_model: str = ""
@@ -94,6 +96,15 @@ class Settings(BaseSettings):
             )
         ):
             raise ValueError("External AI requires OPENAI_API_KEY and OPENAI_ANALYSIS_MODEL")
+        if (
+            self.ai_provider == "groq"
+            and self.ai_external_processing_allowed
+            and (
+                not self.groq_api_key.get_secret_value().strip()
+                or not self.groq_model.strip()
+            )
+        ):
+            raise ValueError("Groq requires GROQ_API_KEY and GROQ_MODEL")
         if self.embedding_model == "" and not self.ai_external_processing_allowed:
             # The previous environment template left EMBEDDING_MODEL blank.
             self.embedding_model = EMBEDDING_MODEL

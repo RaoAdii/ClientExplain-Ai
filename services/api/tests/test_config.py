@@ -44,6 +44,8 @@ def make_settings(monkeypatch):
         "AI_PROVIDER",
         "EMBEDDING_DIMENSIONS",
         "EMBEDDING_MODEL",
+        "GROQ_API_KEY",
+        "GROQ_MODEL",
         "MAX_UPLOAD_BYTES",
         "OPENAI_ANALYSIS_MODEL",
         "OPENAI_API_KEY",
@@ -76,6 +78,23 @@ def test_external_ai_requires_key_model_and_embedding_pair(make_settings):
     with pytest.raises(ValidationError, match="EMBEDDING_MODEL.*EMBEDDING_DIMENSIONS"):
         make_settings(**configured, embedding_model="text-embedding-3-large")
     assert make_settings(**configured).ai_external_processing_allowed is True
+
+
+def test_groq_requires_external_processing_key_and_model(make_settings):
+    enabled = {"ai_provider": "groq", "ai_external_processing_allowed": True}
+    for incomplete in (
+        {"groq_api_key": "", "groq_model": "openai/gpt-oss-20b"},
+        {"groq_api_key": "test-only-key", "groq_model": "  "},
+    ):
+        with pytest.raises(ValidationError, match="GROQ_API_KEY.*GROQ_MODEL"):
+            make_settings(**enabled, **incomplete)
+
+    configured = make_settings(
+        **enabled,
+        groq_api_key="test-only-key",
+        groq_model="openai/gpt-oss-20b",
+    )
+    assert configured.ai_provider == "groq"
 
 
 def test_embedding_dimension_is_1536_for_initial_model(make_settings):

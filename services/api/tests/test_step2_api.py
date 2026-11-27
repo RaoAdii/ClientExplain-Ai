@@ -97,6 +97,10 @@ def workflow(tmp_path, monkeypatch):
                 responsible_party="Client",
                 required_documents=["Notice"],
                 estimated_duration="Unknown",
+                inputs=["Existing document"],
+                actions=["Review the notice"],
+                expected_outputs=["Reviewed notice"],
+                decision_points=["Confirm next step"],
                 source_backed=True,
                 general_explanation=False,
                 limitations=["Review"],
@@ -127,6 +131,41 @@ def workflow(tmp_path, monkeypatch):
                     "applicability_date": "2026-01-01",
                     "audience": "Client",
                     "complexity": "simple",
+                    "language": "English",
+                    "main_objective": "Understand the notice",
+                    "parties_involved": ["Client"],
+                    "facts": [
+                        {
+                            "statement": "A notice is present.",
+                            "evidence_chunk_id": str(ids["chunk"]),
+                            "excerpt": "Private evidence",
+                            "source_filename": "evidence.txt",
+                            "page_number": 1,
+                        }
+                    ],
+                    "financial_facts": [
+                        {
+                            "kind": "deposit",
+                            "label": "Recorded deposit",
+                            "amount": "10.00",
+                            "currency": "USD",
+                            "evidence_chunk_id": str(ids["chunk"]),
+                            "excerpt": "Private evidence",
+                            "source_filename": "evidence.txt",
+                            "page_number": 1,
+                        }
+                    ],
+                    "potential_balances": [
+                        {
+                            "currency": "USD",
+                            "deposit_total": "10.00",
+                            "proposed_deductions_total": "2.00",
+                            "potential_balance": "8.00",
+                        }
+                    ],
+                    "information_gaps": [
+                        {"category": "missing_document", "description": "Receipt"}
+                    ],
                     "missing_information": ["Date"],
                     "limitations": ["Professional review"],
                     "review_required": True,
@@ -350,10 +389,17 @@ def test_stage_list_contains_process_metadata_and_stages_in_order(workflow):
     assert data["jurisdiction"] == "India" and data["legal_area"] == "Civil"
     assert data["applicability_date"] == date(2026, 1, 1).isoformat()
     assert data["missing_information"] == ["Date"] and data["review_required"] is True
+    assert data["language"] == "English" and data["main_objective"] == "Understand the notice"
+    assert data["facts"][0]["source_filename"] == "evidence.txt"
+    assert data["facts"][0]["page_number"] == 1
+    assert data["financial_facts"][0]["amount"] == "10.00"
+    assert data["potential_balances"][0]["potential_balance"] == "8.00"
+    assert data["information_gaps"][0]["category"] == "missing_document"
     assert [stage["title"] for stage in data["stages"]] == ["First", "Second"]
     stage = client.get(f"/api/v1/stages/{ids['stage']}")
     assert stage.status_code == 200 and stage.json()["responsible_party"] == "Client"
     assert stage.json()["verification_status"] == "unverified"
+    assert stage.json()["actions"] == ["Review the notice"]
 
 
 def test_citation_list_preserves_document_provenance_and_review_labels(workflow):
@@ -609,6 +655,23 @@ def test_empty_current_process_and_unselected_general_analysis_are_honest(workfl
     response = client.post(f"/api/v1/projects/{ids['project']}/analyze", json=request)
     assert response.status_code == 202
     assert client.get(f"/api/v1/projects/{ids['project']}/stages").json()["stages"] == []
+
+
+def test_groq_admits_ready_selected_documents_for_external_processing(workflow, monkeypatch):
+    client, ids, _ = workflow
+    monkeypatch.setattr(settings, "ai_provider", "groq")
+    monkeypatch.setattr(settings, "ai_external_processing_allowed", True)
+    monkeypatch.setattr(settings, "groq_api_key", SecretStr("offline-test-key"))
+    monkeypatch.setattr(settings, "groq_model", "openai/gpt-oss-20b")
+
+    response = client.post(f"/api/v1/projects/{ids['project']}/analyze", json=payload(ids))
+
+    assert response.status_code == 202, response.text
+    with SessionLocal() as db:
+        job = db.get(GenerationJob, UUID(response.json()["id"]))
+        assert job.request_metadata["analysis_request"]["selected_document_ids"] == [
+            str(ids["document"])
+        ]
 
 
 def test_deletion_cancels_analysis_using_the_document(workflow, monkeypatch):

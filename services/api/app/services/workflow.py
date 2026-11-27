@@ -65,13 +65,17 @@ def submit_analysis(principal, project_id, request, idempotency_key, response):
             "provider": settings.ai_provider,
             "model": settings.ollama_analysis_model
             if settings.ai_provider == "ollama"
+            else settings.groq_model
+            if settings.ai_provider == "groq"
             else settings.openai_analysis_model,
             "embedding_model": settings.ollama_embedding_model
             if settings.ai_provider == "ollama"
+            else None
+            if settings.ai_provider == "groq"
             else settings.embedding_model,
             "embedding_dimensions": settings.embedding_dimensions,
             "prompt": SYSTEM_INSTRUCTIONS,
-            "schema_version": "step2-v1",
+            "schema_version": "step2-v2",
         }
         digest = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
         existing = (

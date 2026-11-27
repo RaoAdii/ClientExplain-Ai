@@ -13,7 +13,12 @@ from app.integrations.openai_provider import (
     ProviderTransportError,
     ProviderUnavailable,
 )
-from app.schemas.analysis import AnalysisRequest, EmbeddingBatch, EvidenceChunk, LegalProcess
+from app.schemas.analysis import (
+    AnalysisRequest,
+    EmbeddingBatch,
+    EvidenceChunk,
+    LegalProcess,
+)
 from app.services.prompting import REPAIR_INSTRUCTIONS, analysis_messages
 from pydantic import ValidationError
 
@@ -128,7 +133,11 @@ class OllamaLegalAnalysisProvider(_OllamaProvider):
                 parsed = LegalProcess.model_validate_json(content)
                 return LegalProcess.model_validate(
                     parsed.model_dump(),
-                    context={"jurisdiction": request.jurisdiction, "evidence": passages},
+                    context={
+                        "jurisdiction": request.jurisdiction,
+                        "language": request.language,
+                        "evidence": passages,
+                    },
                 )
             except (ValidationError, json.JSONDecodeError, ValueError, KeyError, TypeError):
                 if attempt:

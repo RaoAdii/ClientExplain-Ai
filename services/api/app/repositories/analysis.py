@@ -1,5 +1,7 @@
 """Atomic stage/citation/version publication, within the caller's locked transaction."""
 
+from collections import defaultdict
+from decimal import Decimal
 from uuid import UUID
 
 from app.models.entities import (
@@ -56,9 +58,37 @@ def publish_analysis(db, job, project, process, evidence):
         )
     )
     snapshot = process.model_dump(mode="json")
+    for field in ("facts", "financial_facts"):
+        snapshot[field] = [
+            {
+                **fact,
+                "source_filename": evidence_by_id[fact["evidence_chunk_id"]].source_filename,
+                "page_number": evidence_by_id[fact["evidence_chunk_id"]].page_number,
+            }
+            for fact in snapshot[field]
+        ]
     snapshot["limitations"] = list(
         dict.fromkeys([*snapshot["limitations"], ASSOCIATION_LIMITATION])
     )
+    balances = defaultdict(
+        lambda: {"deposit_total": Decimal(0), "proposed_deductions_total": Decimal(0)}
+    )
+    for fact in process.financial_facts:
+        total_name = (
+            "deposit_total" if fact.kind == "deposit" else "proposed_deductions_total"
+        )
+        balances[fact.currency][total_name] += fact.amount
+    snapshot["potential_balances"] = [
+        {
+            "currency": currency,
+            "deposit_total": str(totals["deposit_total"]),
+            "proposed_deductions_total": str(totals["proposed_deductions_total"]),
+            "potential_balance": str(
+                totals["deposit_total"] - totals["proposed_deductions_total"]
+            ),
+        }
+        for currency, totals in sorted(balances.items())
+    ]
     for output, validated, stage_snapshot in zip(
         process.stages, validation.stages, snapshot["stages"], strict=True
     ):

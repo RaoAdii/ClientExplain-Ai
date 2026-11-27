@@ -5,7 +5,12 @@ from collections.abc import Callable
 from typing import Protocol, TypeVar
 
 from app.core.config import EMBEDDING_DIMENSIONS, EMBEDDING_MODEL, Settings
-from app.schemas.analysis import AnalysisRequest, EmbeddingBatch, EvidenceChunk, LegalProcess
+from app.schemas.analysis import (
+    AnalysisRequest,
+    EmbeddingBatch,
+    EvidenceChunk,
+    LegalProcess,
+)
 from app.services.prompting import REPAIR_INSTRUCTIONS, analysis_messages
 from openai import (
     APIConnectionError,
@@ -75,6 +80,8 @@ class EmbeddingProvider(Protocol):
 
 
 class LegalAnalysisProvider(Protocol):
+    provider_name: str
+
     def analyze(self, request: AnalysisRequest, evidence: list[EvidenceChunk]) -> LegalProcess: ...
 
 
@@ -117,6 +124,12 @@ def provider_is_configured(settings: Settings) -> bool:
     if settings.ai_provider == "ollama":
         return bool(
             settings.ollama_analysis_model.strip() and settings.ollama_embedding_model.strip()
+        )
+    if settings.ai_provider == "groq":
+        return bool(
+            settings.ai_external_processing_allowed
+            and settings.groq_api_key.get_secret_value().strip()
+            and settings.groq_model.strip()
         )
     return bool(
         settings.ai_external_processing_allowed
@@ -223,7 +236,11 @@ class OpenAILegalAnalysisProvider(_OpenAIProvider):
                     raise ValueError("Missing structured output")
                 return LegalProcess.model_validate(
                     response.output_parsed.model_dump(),
-                    context={"jurisdiction": request.jurisdiction, "evidence": passages},
+                    context={
+                        "jurisdiction": request.jurisdiction,
+                        "language": request.language,
+                        "evidence": passages,
+                    },
                 )
             except (ValidationError, json.JSONDecodeError, ValueError, AttributeError, TypeError):
                 if attempt:
@@ -246,4 +263,8 @@ def get_analysis_provider(settings: Settings) -> LegalAnalysisProvider:
         from app.integrations.ollama_provider import OllamaLegalAnalysisProvider
 
         return OllamaLegalAnalysisProvider(settings)
+    if settings.ai_provider == "groq":
+        from app.integrations.groq_provider import GroqLegalAnalysisProvider
+
+        return GroqLegalAnalysisProvider(settings)
     return OpenAILegalAnalysisProvider(settings)
